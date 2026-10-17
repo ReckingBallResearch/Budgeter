@@ -179,7 +179,7 @@ dialog::backdrop{background:rgba(10,15,20,.55)}
     <button class="tab" role="tab" data-tab="goals">Goals</button>
   </div>
   <main id="main"><div class="empty" style="margin-top:24px">Loading your budget…</div></main>
-  <div class="foot"><button class="btn sm" data-act="kickoff">Redo kickoff</button><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore from backup</button><input type="file" id="rf" accept=".json,application/json" hidden><span class="muted">Changes save automatically to your account and to this device.</span></div>
+  <div class="foot"><button class="btn sm" data-act="kickoff">Redo kickoff</button><button class="btn sm" data-act="backup">Download backup</button><button class="btn sm" data-act="restore">Restore from backup</button><input type="file" id="rf" accept=".json,application/json" hidden><span class="muted" id="savenote">Changes save automatically to this device.</span></div>
 </div>
 <dialog id="dlg"></dialog>
 <script>
@@ -253,8 +253,30 @@ async function allMonths(){
 }
 async function saveFile(filename,data,type){
   let dm=null;try{dm=window.claude?await claude.use('downloads'):null}catch(e){}
-  if(!dm){toast('Saving files is not available in this view');return}
-  await dm.save({filename,data});
+  if(dm)await dm.save({filename,data});
+  else{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=filename;document.body.appendChild(a);a.click();a.remove()}
+}
+/* older saves: Monthly planner kept data under planner: on this device and scheduled loans on the account */
+function moveOldKeys(){
+  try{
+    if(localStorage.getItem('budgeter:plan')||!localStorage.getItem('planner:plan'))return;
+    const ks=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith('planner:'))ks.push(k)}
+    ks.forEach(k=>localStorage.setItem('budgeter:'+k.slice(8),localStorage.getItem(k)));
+  }catch(e){}
+}
+function upgrade(p){
+  let ch=false;
+  p.accounts.forEach(a=>{
+    if(a.type==='credit'&&!+a.dueDay){const d=+a.due||(a.duedate?+a.duedate.slice(8,10):0);if(d){a.dueDay=d;ch=true}}
+    if(a.type==='loan'&&a.pdate){
+      if(+a.min>0&&!p.bills.some(b=>b.to===a.id)){
+        const cat=['Debt payment','Other'].find(c=>p.cats.some(x=>x.name===c))||p.cats[0]?.name||'Other';
+        p.bills.push({id:uid(),name:a.name+' payment',amt:+a.min,freq:'monthly',date:a.pdate,end:a.lend||'',acct:a.lfrom||'',to:a.id,cat,auto:!!a.lauto});
+      }
+      ['pdate','lfrom','lend','lauto'].forEach(k=>delete a[k]);ch=true;
+    }
+  });
+  return ch;
 }
 async function backup(){
   const months=await allMonths(),t={};
@@ -270,7 +292,7 @@ function restore(file){
     if(!ok){toast('That file is not a Budgeter or Monthly planner backup');return}
     const ms=Object.keys(b.tx||{}).filter(m=>/^\d{4}-\d{2}$/.test(m)&&b.tx[m]&&Array.isArray(b.tx[m].items));
     ask(`Restore your plan and ${ms.length} months of spending from this backup${b.exported?' ('+b.exported.slice(0,10)+')':''}?`,'Restore',()=>{
-      plan=Object.assign(blank(),b.plan);savePlan();
+      plan=Object.assign(blank(),b.plan);plan.payOn=plan.payOn||{};upgrade(plan);savePlan();
       ms.forEach(m=>{tx[m]={items:b.tx[m].items};saveTx(m)});
       render();toast('Backup restored');
     });
@@ -1123,11 +1145,13 @@ addEventListener('pagehide',flushAll);
       if(db&&id){S.db=db;S.uid=id}
     }
   }catch(e){}
+  if(S.db)$('#savenote').textContent='Changes save automatically to your account and to this device.';
+  moveOldKeys();
   try{plan=Object.assign(blank(),await sRead('plan')||{})}
   catch(e){S.locked=true;plan=blank();status('Load failed: reload before editing','bad')}
   if(!S.locked)status(okMsg());
   plan.payOn=plan.payOn||{};
-  plan.accounts.forEach(a=>{if(a.type==='credit'&&!+a.dueDay){const d=+a.due||(a.duedate?+a.duedate.slice(8,10):0);if(d)a.dueDay=d}});
+  if(upgrade(plan))savePlan();
   const ui=lget('ui');if(ui&&VIEWS[ui.tab]&&ui.tab!=='kickoff')tab=ui.tab;
   if(plan.kickoff&&!plan.kickDone&&plan.accounts.length)tab='kickoff';
   render();

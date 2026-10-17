@@ -1,8 +1,8 @@
 {
   "name": "budgeter",
   "productName": "Budgeter",
-  "version": "1.0.0",
-  "description": "Monthly budget planner: income, bills, accounts, transactions and goals, stored on this computer.",
+  "version": "2.0.0",
+  "description": "Monthly budget planner: income, bills, spending, accounts, debt, trends and goals, stored on this computer.",
   "author": "Sean Keehan",
   "main": "main.js",
   "scripts": {
