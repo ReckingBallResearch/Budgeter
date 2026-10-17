@@ -1,0 +1,27 @@
+{
+  "name": "budgeter",
+  "productName": "Budgeter",
+  "version": "1.0.0",
+  "description": "Monthly budget planner: income, bills, accounts, transactions and goals, stored on this computer.",
+  "author": "Sean Keehan",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac --arm64"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.suckuhpunch.budgeter",
+    "productName": "Budgeter",
+    "files": ["main.js", "app/**/*"],
+    "mac": {
+      "category": "public.app-category.finance",
+      "target": ["dmg"],
+      "identity": null
+    },
+    "dmg": { "title": "Budgeter" }
+  }
+}
