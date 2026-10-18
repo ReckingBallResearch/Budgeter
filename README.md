@@ -19,7 +19,14 @@ Version 2 is the full Budgeter app: Spending, Debt and Trends tabs, kickoff, qui
 ## Updating the app
 The app is `~/Budgeter/app/index.html`, the same file that runs as the Budgeter artifact on claude.ai. After changing it, run `bash ~/Budgeter/install.sh`.
 
+## Reading screenshots with Claude
+**Import statement** can read screenshots or photos of a statement or banking app, and pasted statement text. On this Mac that needs your own Anthropic API key:
+1. Create a key at https://console.anthropic.com/settings/keys (it's billed to your Anthropic account, separate from a Claude subscription; usually a few cents per screenshot).
+2. In Budgeter, open **Spending → Import statement**, paste the key and click **Save key**.
+
+The key is encrypted with your Mac's Keychain, stays in the app's main process, and is only sent to Anthropic. **Remove key** in the same dialog deletes it.
+
 ## Differences from the web version
 - No account sync: data lives on this computer only.
-- "Read with Claude" for pasted PDF statement text isn't available. CSV import works the same.
+- Reading screenshots and statement text with Claude uses your Anthropic API key instead of your Claude account. CSV import works the same.
 - Fonts fall back to the system font when offline.

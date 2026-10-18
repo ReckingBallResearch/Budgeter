@@ -3,7 +3,7 @@
 Monthly budget planner. The whole app is one file, `app/index.html` (HTML, CSS and vanilla JS, no build step). The same file runs in two places:
 
 - **claude.ai artifact** "Budgeter": https://claude.ai/artifact/JNg9Q5Q8WCvU4tBUzzCRXM, published with capabilities `db`, `downloads`, `sample`, `user`. Data syncs to the viewer's account (`data/users/<id>/plan` and `tx-YYYY-MM` docs) and is also copied to localStorage.
-- **macOS desktop app** (Electron, `main.js`). `window.claude` doesn't exist there, so the app falls back to localStorage only, saves files with an `<a download>` link, and hides "Read with Claude".
+- **macOS desktop app** (Electron, `main.js`). `window.claude` doesn't exist there, so the app falls back to localStorage only and saves files with an `<a download>` link. Claude features (statement text and screenshots) go through `window.budgeterDesktop` (`preload.js`) to the main process, which calls the API with the official SDK, `claude-opus-5-5`, structured JSON output and `fallbacks: "default"`, using the person's API key encrypted with `safeStorage`. In the page, `sampleCaps()` hides that difference: `deskSample.json` mirrors the artifact's `sample.json`.
 
 This folder is the source of truth. Edit `app/index.html` here, then ship it to one or both targets.
 

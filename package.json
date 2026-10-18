@@ -16,12 +16,23 @@
   "build": {
     "appId": "com.suckuhpunch.budgeter",
     "productName": "Budgeter",
-    "files": ["main.js", "app/**/*"],
+    "files": [
+      "main.js",
+      "preload.js",
+      "app/**/*"
+    ],
     "mac": {
       "category": "public.app-category.finance",
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "identity": null
     },
-    "dmg": { "title": "Budgeter" }
+    "dmg": {
+      "title": "Budgeter"
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0"
   }
 }

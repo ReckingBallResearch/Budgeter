@@ -695,8 +695,29 @@ function parseCSV(t){
   }
   r.push(c);if(r.some(x=>x.trim()))rows.push(r);return rows;
 }
-/* sample with its image limits; img is null where this view can't send images (desktop, older viewers) */
+/* sample with its image limits; img is null where this view can't send images.
+   On desktop, Claude is reached through the app with the person's own API key; desktop:true marks that path */
+const DESK=window.budgeterDesktop||null;
+const API_TYPES=['image/jpeg','image/png','image/webp','image/gif'];
+async function forApi(b){
+  let bm;try{bm=await createImageBitmap(b)}catch(e){throw{code:'image_rejected'}}
+  const w=bm.width,h=bm.height,s=Math.min(1,1568/Math.max(w,h));let out=b;
+  if(s<1||!API_TYPES.includes(b.type)||b.size>3.5e6){
+    const c=document.createElement('canvas');c.width=Math.round(w*s);c.height=Math.round(h*s);
+    c.getContext('2d').drawImage(bm,0,0,c.width,c.height);out=await new Promise(r=>c.toBlob(r,'image/jpeg',.9));
+  }
+  bm.close();
+  const data=await new Promise((r,j)=>{const fr=new FileReader();fr.onload=()=>r(String(fr.result).split(',')[1]);fr.onerror=j;fr.readAsDataURL(out)});
+  return{type:out.type,data};
+}
+const deskSample={json:async(prompt,o={})=>{
+  const images=[];for(const b of [].concat(o.images?[...o.images]:[]))images.push(await forApi(b));
+  const r=await DESK.read({prompt,images});
+  if(!r.ok)throw{code:r.code,message:r.message||''};
+  return r.data;
+}};
 async function sampleCaps(){
+  if(DESK){try{return await DESK.hasKey()?{desktop:true,s:deskSample,img:{maxCount:10,maxInputBytes:50e6,mediaTypes:API_TYPES}}:{desktop:true,s:null,img:null}}catch(e){return null}}
   try{const s=window.claude?await claude.use('sample'):null;if(!s)return null;const l=await s.limits().catch(()=>null);return{s,img:l?.images||null}}catch(e){return null}
 }
 /* Claude sees each image at about 1.2 megapixels, so tall phone screenshots go as overlapping pieces to keep small text readable */
@@ -719,6 +740,11 @@ async function shotPieces(files,lim){
 function claudeErr(e,what){
   const c=e&&e.code;
   if(c==='not_granted'||c==='sampling_disabled')return'Claude isn’t allowed for this page. You can still import a CSV.';
+  if(c==='bad_key'||c==='no_key')return'Your Anthropic API key didn’t work. Check it in the Claude API key section.';
+  if(c==='offline')return'Couldn’t reach Claude. Check your internet connection.';
+  if(c==='too_long')return'That’s too many transactions at once. Try fewer screenshots.';
+  if(c==='refused')return`Claude wouldn’t read ${what}. Try a different screenshot, or use CSV.`;
+  if(c==='bad_request'&&e.message)return'Claude couldn’t take the request: '+e.message;
   if(c==='image_rejected')return'Claude couldn’t open that image. Use a PNG or JPEG screenshot.';
   if(c==='rate_limited')return'Claude is busy or you’ve reached your usage limit. Try again later.';
   if(c==='invalid_json'||c==='empty_completion')return`Claude couldn’t find transactions in ${what}.`;
@@ -733,14 +759,32 @@ function openImport(){
   <div class="fld"><label for="if">CSV file from your bank or card</label><input type="file" id="if" accept=".csv,.tsv,.txt"></div>
   <div class="fld" id="ishot" hidden><label for="ii">Or screenshots of your statement or banking app</label><input type="file" id="ii" accept="image/*" multiple>
   <small class="muted">Claude reads the transactions from the pictures. Pending transactions are left out, so import them once they post.</small></div>
+  <div class="fld" id="ikey" hidden></div>
   <div class="fld"><label for="ip">Or paste rows or statement text</label><textarea id="ip" rows="4" placeholder="Paste CSV rows, or text copied from a PDF statement"></textarea>
   <div class="acts left"><button class="btn sm" type="button" id="ipc">Read as CSV</button><button class="btn sm" type="button" id="ipl" hidden>Read with Claude</button></div>
   <small class="muted">Reading with Claude sends the pasted text to Claude to pick out the transactions.</small></div>
   <div id="imap"></div><div id="iprev"></div><p class="err" id="ferr"></p>
   <div class="acts"><button class="btn" type="button" data-close>Cancel</button><button class="btn pri" type="button" id="igo" disabled>Import</button></div>`;
   d.querySelector('[data-close]').onclick=()=>d.close();
-  sampleCaps().then(c=>{caps=c;if(!$('#ishot'))return;$('#ipl').hidden=!c;$('#ishot').hidden=!c?.img});
   const err=t=>$('#ferr').textContent=t||'';
+  function showCaps(c){
+    caps=c;if(!$('#ishot'))return;
+    $('#ipl').hidden=!c?.s;$('#ishot').hidden=!c?.img;
+    const k=$('#ikey');k.hidden=!c?.desktop;if(!c?.desktop)return;
+    k.innerHTML=c.s?`<small class="muted">Claude reads screenshots with your Anthropic API key. <button class="lnk" type="button" id="kdel">Remove key</button></small>`
+      :`<label for="kin">Read screenshots with Claude on this Mac</label><small class="muted">Add an API key from <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. It’s locked in your Mac’s Keychain, used only to read statements, and billed to your Anthropic account, usually a few cents per screenshot.</small>
+      <div class="row" style="margin:6px 0 0"><input class="grow" id="kin" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key"><button class="btn sm" type="button" id="ksave">Save key</button></div>`;
+    if(c.s)$('#kdel').onclick=async()=>{await DESK.clearKey();err();showCaps(await sampleCaps())};
+    else $('#ksave').onclick=async()=>{
+      const v=$('#kin').value.trim();if(!v){err('Paste your API key first.');return}
+      $('#ksave').disabled=true;$('#ksave').textContent='Checking…';
+      const r=await DESK.setKey(v).catch(()=>({ok:false}));
+      if(r.ok){err();toast('API key saved');showCaps(await sampleCaps());return}
+      err(r.code==='bad_key'?'That key didn’t work. Copy it again from console.anthropic.com.':r.code==='no_keychain'?'This Mac couldn’t lock the key in the Keychain, so it wasn’t saved.':r.code==='offline'?'Couldn’t reach Anthropic to check the key. Check your internet connection.':'The key couldn’t be checked. Try again.');
+      $('#ksave').disabled=false;$('#ksave').textContent='Save key';
+    };
+  }
+  sampleCaps().then(showCaps);
   function loadCSV(text){
     err();direct=false;raw=parseCSV(text);
     if(raw.length<2){err('Could not find rows to import.');raw=null;$('#imap').innerHTML='';$('#iprev').innerHTML='';return}
