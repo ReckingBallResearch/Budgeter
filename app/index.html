@@ -89,6 +89,13 @@ tr.past td{color:var(--muted)}
 tr.tot td{font-weight:600;background:var(--bg)}
 tr.grp td{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);background:var(--bg);padding-block:6px}
 tr.short td:first-child{box-shadow:inset 3px 0 0 var(--neg)}
+.grip{display:inline-flex;align-items:center;justify-content:center;width:28px;height:32px;margin:-8px 4px -8px -8px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:grab;touch-action:none;vertical-align:middle}
+.grip:hover{color:var(--ink);background:var(--soft)}
+.grip-sp{display:inline-block;width:24px}
+td.catn{white-space:nowrap}
+tr.drag td{background:var(--soft)}
+tr.drag .grip{cursor:grabbing;color:var(--accent)}
+body.dragging,body.dragging *{user-select:none;-webkit-user-select:none;cursor:grabbing}
 .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;background:var(--soft);color:var(--accent);margin-left:6px;white-space:nowrap}
 .pill.tag{background:var(--warnbg);color:var(--warn)}
 .bar{height:8px;background:var(--soft);border-radius:4px;overflow:hidden;min-width:70px}
@@ -889,7 +896,7 @@ function budget(list){
   const row=(name,bud,editable)=>{
     const s=L.by[name]||0,b=bills[name]||0,used=s+b;tb+=bud;tbi+=b;ts+=s;const pct=bud>0?Math.min(100,Math.max(0,used/bud*100)):0,over=bud>0&&used>bud+0.5;
     if(!editable&&!s&&!b)return'';
-    return`<tr><td>${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td><td class="num">${b?f0(b):''}</td><td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
+    return`<tr${editable?` data-cat="${esc(name)}"`:''}><td class="catn">${editable?`<button class="grip" type="button" data-cat="${esc(name)}" aria-label="Move ${esc(name)}. Drag, or use the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></g></svg></button>`:'<span class="grip-sp"></span>'}${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td><td class="num">${b?f0(b):''}</td><td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
   };
   const rows=plan.cats.map(c=>row(c.name,+c.budget||0,true)).join('')+extra.map(n=>row(n,0,false)).join('');
   return`<div class="scroll"><table><thead><tr><th>Category</th><th class="num">Monthly budget</th><th class="num">Bills</th><th class="num">Logged</th><th class="num">Left</th><th></th><th></th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="num">${f0(tb)}</td><td class="num">${f0(tbi)}</td><td class="num">${f0(ts)}</td><td class="num">${tb>0?f0(tb-tbi-ts):''}</td><td></td><td></td></tr></tbody></table></div>`;
@@ -1195,6 +1202,46 @@ document.addEventListener('click',e=>{
   else if(act==='timport')openImport();else if(act==='trules')editRules();
   else if(act==='catadd')openForm('Add category',[{k:'name',l:'Category name',req:1},{k:'budget',l:'Monthly budget',t:'number'}],{},o=>{if(!catList().includes(o.name)){plan.cats.push({name:o.name,budget:o.budget});savePlan()}render()});
   else if(act==='catdel'){const c=b.dataset.cat;ask(`Remove category “${c}”?`,'Remove',()=>{plan.cats=plan.cats.filter(x=>x.name!==c);savePlan();render()})}
+});
+/* budget categories: drag the grip (mouse or touch) or use arrow keys on it; the order is the plan's category order */
+function catOrder(names){
+  const before=plan.cats.map(c=>c.name).join('\n');
+  plan.cats.sort((a,b)=>names.indexOf(a.name)-names.indexOf(b.name));
+  if(plan.cats.map(c=>c.name).join('\n')!==before)savePlan();
+}
+document.addEventListener('pointerdown',e=>{
+  const g=e.target.closest('.grip');if(!g||!plan||e.button>0)return;
+  e.preventDefault();
+  /* listen on the document: moving the row in the DOM drops pointer capture on the grip */
+  const tr=g.closest('tr'),tb=tr.parentNode,pid=e.pointerId;let lastY=e.clientY,raf=0;
+  tr.classList.add('drag');document.body.classList.add('dragging');
+  /* the row goes past every neighbour whose middle the pointer has crossed */
+  const place=y=>{
+    const rows=[...tb.querySelectorAll('tr[data-cat]')],i=rows.indexOf(tr);let j=i;
+    for(let k=0;k<rows.length;k++){
+      if(k===i)continue;const b=rows[k].getBoundingClientRect(),mid=b.top+b.height/2;
+      if(k<i&&y<mid){j=k;break}
+      if(k>i&&y>mid)j=k;
+    }
+    if(j<i)tb.insertBefore(tr,rows[j]);else if(j>i)tb.insertBefore(tr,rows[j].nextSibling);
+  };
+  const edge=()=>{const d=lastY<70?-12:lastY>innerHeight-70?12:0;if(d){scrollBy(0,d);place(lastY);raf=requestAnimationFrame(edge)}else raf=0};
+  const move=ev=>{if(ev.pointerId!==pid)return;ev.preventDefault();lastY=ev.clientY;place(lastY);if(!raf)raf=requestAnimationFrame(edge)};
+  const end=ev=>{
+    if(ev.pointerId!==pid)return;
+    cancelAnimationFrame(raf);document.removeEventListener('pointermove',move);document.removeEventListener('pointerup',end);document.removeEventListener('pointercancel',end);
+    tr.classList.remove('drag');document.body.classList.remove('dragging');
+    catOrder([...tb.querySelectorAll('tr[data-cat]')].map(r=>r.dataset.cat));
+  };
+  document.addEventListener('pointermove',move,{passive:false});document.addEventListener('pointerup',end);document.addEventListener('pointercancel',end);
+});
+document.addEventListener('keydown',e=>{
+  const g=e.target.closest?.('.grip');if(!g||!plan||(e.key!=='ArrowUp'&&e.key!=='ArrowDown'))return;
+  e.preventDefault();
+  const names=plan.cats.map(c=>c.name),i=names.indexOf(g.dataset.cat),j=i+(e.key==='ArrowUp'?-1:1);
+  if(i<0||j<0||j>=names.length)return;
+  [names[i],names[j]]=[names[j],names[i]];catOrder(names);paint();
+  [...document.querySelectorAll('.grip')].find(x=>x.dataset.cat===g.dataset.cat)?.focus();
 });
 document.addEventListener('change',e=>{
   const b=e.target.closest('[data-act]');if(!b||!plan)return;const {act,id}=b.dataset;const A=()=>acct(id),num=()=>parseFloat(b.value)||0;
