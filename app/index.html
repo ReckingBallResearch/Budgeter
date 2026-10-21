@@ -380,7 +380,7 @@ const divItem=id=>{const a=acct(id.slice(4));return a?{name:a.name+' dividend',a
 const intItem=id=>{const a=acct(id.slice(4));return a?{name:a.name+' interest',amt:mInt(a)}:null};
 function cardEst(a,y,m){
   const py=m?y:y-1,pm=m?m-1:11,pk=`${py}-${pad(pm+1)}`;
-  let t=0;plan.bills.forEach(b=>{if(b.acct===a.id&&!b.planned)t+=occ(b,py,pm).length*(+b.amt||0)});
+  let t=0;plan.bills.forEach(b=>{if(b.acct===a.id&&!b.planned)occ(b,py,pm).forEach(d=>t+=+(plan.actual?.[`out:${b.id}:${d}`]??b.amt)||0)});
   (tx[pk]?.items||[]).forEach(x=>{if(x.acct===a.id&&x.amt<0&&!NOSPEND.includes(x.cat))t-=x.amt});
   return r2(t);
 }
@@ -388,7 +388,7 @@ function build(y,m){
   const o=[],act=plan.actual||{},ci=now.getFullYear()*12+now.getMonth(),i=y*12+m;
   const mkEv=(t,it,d,x)=>{const key=`${t}:${it.id}:${d}`,has=act[key]!=null;return{t,id:it.id,name:it.name,amt:has?+act[key]:(+it.amt||0),est:+it.amt||0,variable:!!it.variable,hasActual:has,date:d,acct:it.acct,cat:it.cat,to:it.to,key,...x}};
   plan.income.forEach(n=>occ(n,y,m).forEach(d=>o.push(mkEv('in',n,d))));
-  plan.bills.forEach(b=>{if(b.planned&&!plan.showPlanned)return;occ(b,y,m).forEach(d=>o.push(mkEv('out',b,d,{planned:!!b.planned})))});
+  plan.bills.forEach(b=>{if(b.planned&&!plan.showPlanned)return;occ(b,y,m).forEach(d=>o.push(mkEv('out',b,d,{planned:!!b.planned,bill:true})))});
   if(i>=ci){
     plan.accounts.forEach(a=>{
       if(!cardPay(a))return;
@@ -481,6 +481,34 @@ function sinceKick(a){
   });
   return{items,d:r2(d),dc:r2(dc)};
 }
+/* variable bills: once a bill is issued (some days before it's due) ask for the amount due.
+   An amount due is stored like an actual amount but doesn't mark the bill paid */
+const ISSUE_DAYS=21;
+const issuedOn=(b,due)=>addDays(due,-(+b.issue>0?+b.issue:ISSUE_DAYS));
+function billOccs(b,from,to){const o=[];for(let i=mi(from);i<=mi(to);i++)occ(b,Math.floor(i/12),i%12).forEach(d=>{if(d>=from&&d<=to)o.push(d)});return o}
+const billKey=(b,d)=>`out:${b.id}:${d}`;
+/* bills that should be out by now (or went unpaid in the last two weeks) with no amount entered */
+function billsToEnter(){
+  const k=KICK(),out=[];
+  plan.bills.forEach(b=>{
+    if(!b.variable||(b.planned&&!plan.showPlanned))return;
+    billOccs(b,addDays(TODAY,-14),addDays(TODAY,62)).forEach(d=>{
+      const key=billKey(b,d);
+      if((k&&d<k)||plan.done[key]||plan.actual?.[key]!=null||issuedOn(b,d)>TODAY)return;
+      out.push({b,due:d,key});
+    });
+  });
+  return out.sort((x,y)=>x.due<y.due?-1:1);
+}
+/* the next bill still to pay, for the Bills tab */
+const nextBill=b=>billOccs(b,addDays(TODAY,-14),addDays(TODAY,400)).find(d=>!plan.done[billKey(b,d)])||'';
+function setDue(k,v){
+  v=String(v??'').trim();
+  if(v==='')delete plan.actual[k];
+  else{const n=parseFloat(v);if(isNaN(n))return false;plan.actual[k]=r2(Math.abs(n))}
+  savePlan();return true;
+}
+function dueToast(k){const [,id,d]=k.split(':'),b=plan.bills.find(x=>x.id===id),v=plan.actual?.[k];if(b&&v!=null)toast(`${b.name}: ${f2(v)} due ${dl(d)}`)}
 function goalNeed(g){
   const rem=Math.max(0,(+g.target||0)-(+g.saved||0));if(!g.date||rem<=0)return 0;
   return rem/Math.max(1,mi(g.date)-(now.getFullYear()*12+now.getMonth()));
@@ -571,6 +599,7 @@ const KINDS={
     {k:'variable',l:'The amount varies (utilities, usage-based)',t:'checkbox'},
     {k:'amt',l:'Amount (your estimate if it varies)',t:'number',req:1},
     {k:'basis',l:'Notes (optional)',ph:'Average of the last 6 bills',show:o=>o.variable},
+    {k:'issue',l:'Usually issued this many days before it’s due',t:'number',show:o=>o.variable,ph:String(ISSUE_DAYS),help:'Once each bill should be out, the Overview asks for the amount due. You can also enter it anytime on the Bills tab.'},
     ...freqF('First or next due date'),
     {k:'end',l:'Last payment date (optional)',t:'date',show:o=>o.freq!=='once',help:'For loans that end, like a car payment.'},
     {k:'acct',l:'Pay from',t:'select',opts:acctOpts(),help:'Pick a card if the bill is charged to it. It then shows up in that card’s next payment.'},
@@ -953,7 +982,7 @@ async function tipIcs(sel){
   try{await saveFile(sel.length===1?'transfer-reminder.ics':'transfer-reminders.ics',text,'text/calendar');toast('Reminder file ready. Open it to add it to your calendar.')}catch(e){toast('Reminder was not saved')}
 }
 const payCell=e=>`<input class="mid" type="date" value="${e.date}" data-act="payon" data-key="${esc(e.key)}" aria-label="Pay date for ${esc(e.name)}"><div class="since ${e.date>e.due?'neg':''}">${e.date>e.due?'after the due date, ':''}due ${dl(e.due)}</div>`;
-const amtCell=e=>e.variable?`${e.t==='out'?'−':'+'} <input class="mini" type="number" step="any" min="0" value="${e.hasActual?e.amt:''}" placeholder="${Math.round(e.est)}" data-act="actual" data-key="${esc(e.key)}" aria-label="Actual amount for ${esc(e.name)}"><div class="muted" style="font-size:12px">${e.hasActual?'actual':e.guess?'estimate from charges':'estimate'}</div>`:`${e.t==='out'?'−':'+'}${f2(e.amt)}`;
+const amtCell=e=>e.variable?`${e.t==='out'?'−':'+'} <input class="mini" type="number" step="any" min="0" value="${e.hasActual?e.amt:''}" placeholder="${Math.round(e.est)}" data-act="${e.bill?'due':'actual'}" data-key="${esc(e.key)}" aria-label="${e.bill?'Amount due':'Actual amount'} for ${esc(e.name)}"><div class="muted" style="font-size:12px">${e.hasActual?(e.bill?(plan.done[e.key]?'paid':'billed'):'actual'):e.guess?'estimate from charges':'estimate'}</div>`:`${e.t==='out'?'−':'+'}${f2(e.amt)}`;
 
 /* ---------- kickoff ---------- */
 function kickBanner(){
@@ -1024,6 +1053,7 @@ function vOverview(){
   <div class="note">${list.some(e=>e.passive)?`<label class="chk"><input type="checkbox" data-act="intin"${plan.interestIn?' checked':''}> Count interest and dividends as income</label>`:''}${plan.bills.some(b=>b.planned)?`<label class="chk"><input type="checkbox" data-act="planned"${plan.showPlanned?' checked':''}> Include planned bills</label>`:''}
     ${cardsOut?`<span>Card payments this month total ${f0(cardsOut)}. They pay off earlier charges, so they're on the calendar but not counted above.</span>`:''}${planned?`<span>Planned bills would add ${f0(planned)}.</span>`:''}${intr&&!plan.interestIn?`<span>${f0(intr)} of interest and dividends expected, not counted.</span>`:''}${estIn?`<span>${f0(estIn)} of income is an estimate. Enter the real amount below once it lands.</span>`:''}${contribTot?`<span>${f0(contribTot)} goes into retirement this month, including employer money.</span>`:''}${hsaIn?`<span>${f0(hsaIn)} goes into your HSA this month, including employer money.</span>`:''}${hsaOut||hsaBills?`<span>${f0(hsaOut+hsaBills)} paid from your HSA this month isn't counted above, since it comes out of the HSA.</span>`:''}</div>
   ${stale.length?`<div class="alert"><b>New statement?</b>${stale.map(a=>`<div class="tip"><span>${esc(a.name)} was due ${dl(a.duedate)}. Enter the next statement, due ${dl(nextDue(a,addDays(a.duedate,1)))}.</span><button class="btn sm" data-act="nextstmt" data-id="${a.id}">New statement</button></div>`).join('')}</div>`:''}
+  ${(()=>{const bt=billsToEnter();return bt.length?`<div class="alert"><b>${bt.length===1?'A bill to enter':'Bills to enter'}</b>${bt.map(x=>`<div class="tip"><span>${esc(x.b.name)} should be out by now${x.due<TODAY?`, and was due ${dl(x.due)}`:`, due ${wdl(x.due)}`}. Enter the amount due.</span><span class="row" style="margin:0;flex-wrap:nowrap"><input class="mini" type="number" step="any" min="0" inputmode="decimal" placeholder="~${Math.round(+x.b.amt||0)}" data-act="due" data-key="${esc(x.key)}" aria-label="Amount due for ${esc(x.b.name)}, due ${dl(x.due)}"><button class="btn sm" data-act="duesave" data-key="${esc(x.key)}">Save</button></span></div>`).join('')}<p class="muted" style="font-size:13px;margin:8px 0 0">The amount replaces the estimate for that month. Check the bill off below once it's paid.</p></div>`:''})()}
   ${tipsHtml(tips)}
   <div class="sec"><h2>Log spending</h2>${qaHtml()}</div>
   <div class="sec">${cal(list,tips)}</div>
@@ -1045,7 +1075,7 @@ function vList(kind){
   if(!list.length&&!cards.length)return`<div class="sec">${head}<div class="empty">${isB?'No bills yet. Add rent, subscriptions, loans and anything else with a due date.':'No income yet. Add each paycheck or other deposit with its dates.'}</div></div>`;
   const rows=[...list].sort((a,b)=>(a.planned?1:0)-(b.planned?1:0)).map(i=>{
     const sub=[i.variable&&kind==='income'?CONF[i.conf]:'',i.variable?i.basis:'',acct(i.to)?'Pays down '+acctName(i.to):''].filter(Boolean).join(', ');
-    return`<tr><td>${esc(i.name)}${i.planned?'<span class="pill">planned</span>':''}${i.auto?'<span class="pill">autopay</span>':''}${i.variable?'<span class="pill">estimate</span>':''}${sub?`<div class="muted" style="font-size:13px">${esc(sub)}</div>`:''}</td><td class="num">${i.variable?'~':''}${f2(+i.amt||0)}</td><td>${esc(sched(i))}</td><td>${esc(acctName(i.acct))}</td>${isB?`<td>${esc(i.cat||'')}</td>`:''}<td class="act"><button class="btn sm" data-act="edit" data-kind="${kind}" data-id="${i.id}">Edit</button> <button class="btn sm ghost danger" data-act="del" data-kind="${kind}" data-id="${i.id}">Delete</button></td></tr>`;
+    return`<tr><td>${esc(i.name)}${i.planned?'<span class="pill">planned</span>':''}${i.auto?'<span class="pill">autopay</span>':''}${i.variable?'<span class="pill">estimate</span>':''}${sub?`<div class="muted" style="font-size:13px">${esc(sub)}</div>`:''}</td><td class="num">${i.variable?'~':''}${f2(+i.amt||0)}${isB&&i.variable?(()=>{const d=nextBill(i);if(!d)return'';const k=billKey(i,d),v=plan.actual?.[k],out=issuedOn(i,d)<=TODAY;return`<div class="since" style="margin-top:6px">Due ${dl(d)}${v!=null?', billed':out?', should be out':`, out around ${dl(issuedOn(i,d))}`}</div><input class="mini" type="number" step="any" min="0" inputmode="decimal" value="${v??''}" placeholder="amount due" data-act="due" data-key="${esc(k)}" aria-label="Amount due for ${esc(i.name)}, due ${dl(d)}">`})():''}</td><td>${esc(sched(i))}</td><td>${esc(acctName(i.acct))}</td>${isB?`<td>${esc(i.cat||'')}</td>`:''}<td class="act"><button class="btn sm" data-act="edit" data-kind="${kind}" data-id="${i.id}">Edit</button> <button class="btn sm ghost danger" data-act="del" data-kind="${kind}" data-id="${i.id}">Delete</button></td></tr>`;
   }).join('')+cards.map(a=>`<tr><td>${esc(a.name)} payment<span class="pill">card statement</span><div class="muted" style="font-size:13px">Change it on the Accounts tab.</div></td><td class="num">${+a.stmt>0?f2(+a.stmt):'—'}</td><td>${esc(cardSched(a))}</td><td>${esc(acctName(a.payfrom))}</td><td>Card payment</td><td class="act"><button class="btn sm" data-act="edit" data-kind="accounts" data-id="${a.id}">Edit</button></td></tr>`).join('');
   return`<div class="sec">${head}<div class="scroll"><table><thead><tr><th>${isB?'Bill':'Source'}</th><th class="num">Amount</th><th>Schedule</th><th>${isB?'Pays from':'Deposits into'}</th>${isB?'<th>Category</th>':''}<th></th></tr></thead><tbody>${rows}</tbody></table></div></div>${history(isB?'out':'in')}`;
 }
@@ -1237,6 +1267,7 @@ document.addEventListener('click',e=>{
   else if(act==='today'){view={y:now.getFullYear(),m:now.getMonth()};render()}
   else if(act==='kickoff'){if(!plan.kickoff)plan.kickoff=START();tab='kickoff';render();scrollTo(0,0)}
   else if(act==='kgo')kickGo();
+  else if(act==='duesave'){const el=b.closest('.tip')?.querySelector('[data-act="due"]');if(el&&el.value.trim()&&setDue(b.dataset.key,el.value)){paint();dueToast(b.dataset.key)}}
   else if(act==='kest'){const el=document.querySelector(`[data-kb="${id}"]`);if(el)el.value=b.dataset.v}
   else if(act==='kuse')document.querySelectorAll('[data-act="kest"]').forEach(x=>{const el=document.querySelector(`[data-kb="${x.dataset.id}"]`);if(el)el.value=x.dataset.v});
   else if(act==='add')edit(kind);else if(act==='edit')edit(kind,id);else if(act==='del')del(kind,id);
@@ -1299,6 +1330,7 @@ document.addEventListener('change',e=>{
   else if(act==='extra'){plan.extra=Math.max(0,num());savePlan();paint()}
   else if(act==='strategy'){plan.strategy=b.value;savePlan();paint()}
   else if(act==='budget'){const c=plan.cats.find(x=>x.name===b.dataset.cat);if(c){c.budget=Math.max(0,num());savePlan();paint()}}
+  else if(act==='due'){if(setDue(b.dataset.key,b.value)){paint();dueToast(b.dataset.key)}}
   else if(act==='actual'){
     const k=b.dataset.key,v=b.value.trim(),ap=plan.applied||(plan.applied={}),parts=k.split(':');
     const a=parts[0]==='in'&&parts[1].startsWith('div-')?acct(parts[1].slice(4)):null;
