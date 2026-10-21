@@ -208,7 +208,7 @@ const TODAY=`${now.getFullYear()}-${pad(now.getMonth()+1)}-${pad(now.getDate())}
 const dl=iso=>iso?`${MON[+iso.slice(5,7)-1]} ${+iso.slice(8,10)}`:'';
 const mi=iso=>(+iso.slice(0,4))*12+(+iso.slice(5,7))-1;
 const FREQS=[['monthly','Monthly'],['semi','Twice a month'],['biweekly','Every 2 weeks'],['weekly','Weekly'],['quarterly','Every 3 months'],['semiannual','Every 6 months'],['yearly','Yearly'],['once','One time']];
-const TYPES=[['checking','Checking'],['savings','Savings'],['cash','Cash'],['investment','Investment'],['retirement','Retirement (401k, IRA)'],['property','Vehicle or property'],['credit','Credit card'],['loan','Loan']];
+const TYPES=[['checking','Checking'],['savings','Savings'],['cash','Cash'],['investment','Investment'],['retirement','Retirement (401k, IRA)'],['hsa','HSA (health savings account)'],['property','Vehicle or property'],['credit','Credit card'],['loan','Loan']];
 const DEFAULT_CATS=['Housing','Utilities','Groceries','Take Out','Dining & Bars','Transport','Insurance','Subscriptions','Health','Shopping','Entertainment','Travel','Savings','Other'];
 const RESERVED=['Bill payment','Transfer','Income','Uncategorized'];
 const NOSPEND=['Bill payment','Transfer','Income'];
@@ -219,6 +219,29 @@ const mk=v=>`${v.y}-${pad(v.m+1)}`;
 const isDebt=a=>a&&(a.type==='credit'||a.type==='loan');
 const acct=id=>plan.accounts.find(a=>a.id===id);
 const acctName=id=>acct(id)?.name||'—';
+/* HSA: money set aside for health costs. Its debit card purchases come out of the HSA, not your spending money */
+const isHSA=a=>!!a&&a.type==='hsa';
+const hsaPaid=t=>isHSA(acct(t.acct));
+/* logged purchases (and refunds) on the HSA card after its balance was last recorded */
+function hsaSpent(a){
+  let s=0;const on=a.upd||'';
+  Object.values(tx).forEach(m=>m.items.forEach(t=>{
+    if(t.acct!==a.id)return;
+    if(a.updAt&&t.at?t.date>=on&&t.at>a.updAt:t.date>on)s-=t.amt;
+  }));
+  return r2(s);
+}
+const hsaNow=a=>r2((+a.bal||0)-hsaSpent(a));
+/* IRS limits: [self-only, family]; people 55 and older can add a catch-up amount */
+const HSA_LIMITS={2025:[4300,8550],2026:[4400,8750]},HSA_CATCHUP=1000;
+function hsaYear(a){
+  const y=now.getFullYear(),ly=HSA_LIMITS[y]?y:Math.max(...Object.keys(HSA_LIMITS).map(Number));
+  const limit=HSA_LIMITS[ly][a.cover==='family'?1:0]+(a.age55?HSA_CATCHUP:0);
+  const per=(+a.contrib||0)+(+a.match||0),from=a.ytdOn&&a.ytdOn.slice(0,4)==String(y)?a.ytdOn:TODAY;let left=0;
+  if(per>0&&a.cdate)for(let m=now.getMonth();m<12;m++)left+=occ({freq:a.cfreq||'biweekly',date:a.cdate,day2:a.cday2},y,m).filter(d=>d>from).length*per;
+  const so=a.ytdOn&&a.ytdOn.slice(0,4)==String(y)?+a.ytd||0:0;
+  return{limit,limitYear:ly,so,left:r2(left),total:r2(so+left)};
+}
 const KICK=()=>plan.kickoff||'';
 const START=()=>KICK()>TODAY?KICK():TODAY;
 
@@ -350,7 +373,7 @@ function nextDue(a,from){
 }
 const payAcct=e=>e.card?acct(e.card):(e.t==='out'&&!e.contrib&&acct(e.to)&&isDebt(acct(e.to))?acct(e.to):null);
 const defPay=(e,a)=>addDays(e.due,-(+a.lead||0));
-const hasInt=a=>!isDebt(a)&&!['investment','retirement','property'].includes(a.type)&&+a.apy>0;
+const hasInt=a=>!isDebt(a)&&!['investment','retirement','hsa','property'].includes(a.type)&&+a.apy>0;
 const rate=a=>Math.pow(1+(+a.apy||0)/100,1/12)-1;
 const mInt=a=>r2((+a.bal||0)*rate(a));
 const divItem=id=>{const a=acct(id.slice(4));return a?{name:a.name+' dividend',amt:+a.divAmt||0}:null};
@@ -378,10 +401,11 @@ function build(y,m){
     plan.accounts.forEach(a=>{if(hasInt(a))occ({freq:'monthly',date:'2000-01-'+pad(Math.min(31,+a.intday||31))},y,m).forEach(d=>o.push(mkEv('in',{id:'int-'+a.id,name:a.name+' interest',amt:mInt(a),acct:a.id,variable:true},d,{interest:true,passive:true})))});
     plan.accounts.forEach(a=>{if(a.type==='investment'&&+a.divAmt>0&&a.divDate)occ({freq:a.divFreq||'quarterly',date:a.divDate},y,m).forEach(d=>o.push(mkEv('in',{id:'div-'+a.id,name:a.name+' dividend',amt:a.divAmt,acct:a.id,variable:true},d,{dividend:true,passive:true,mode:a.divMode==='reinvest'?'reinvest':'cash'})))});
     plan.accounts.forEach(a=>{
-      if(a.type!=='retirement'||!a.cdate||!(+a.contrib>0||+a.match>0))return;
+      if(!['retirement','hsa'].includes(a.type)||!a.cdate||!(+a.contrib>0||+a.match>0))return;
+      const hsa=isHSA(a);
       occ({freq:a.cfreq||'biweekly',date:a.cdate,day2:a.cday2},y,m).forEach(d=>{
-        if(+a.contrib>0)o.push(a.cfrom?mkEv('out',{id:'k-'+a.id,name:a.name+' contribution',amt:a.contrib,acct:a.cfrom,cat:'Savings'},d,{to:a.id,contrib:true}):mkEv('save',{id:'k-'+a.id,name:a.name+' contribution',amt:a.contrib,acct:a.id},d,{contrib:true}));
-        if(+a.match>0)o.push(mkEv('save',{id:'m-'+a.id,name:a.name+' employer match',amt:a.match,acct:a.id},d,{contrib:true}));
+        if(+a.contrib>0)o.push(a.cfrom?mkEv('out',{id:'k-'+a.id,name:a.name+' contribution',amt:a.contrib,acct:a.cfrom,cat:'Savings'},d,{to:a.id,contrib:true,hsa}):mkEv('save',{id:'k-'+a.id,name:a.name+' contribution',amt:a.contrib,acct:a.id},d,{contrib:true,hsa}));
+        if(+a.match>0)o.push(mkEv('save',{id:'m-'+a.id,name:a.name+(hsa?' employer contribution':' employer match'),amt:a.match,acct:a.id},d,{contrib:true,hsa}));
       });
     });
   }
@@ -422,7 +446,7 @@ function project(){
   const vi=view.y*12+view.m,s0=START(),ti=mi(s0),cur=evs(view.y,view.m);
   if(vi<ti)return{list:cur,end:null,tips:[]};
   const bal={},hold={},inj={},tips=[];let end=null,endH=null;
-  plan.accounts.forEach(a=>{const inv=a.type==='investment';bal[a.id]=inv?(+a.cash||0):(+a.bal||0);if(inv)hold[a.id]=+a.bal||0});
+  plan.accounts.forEach(a=>{const inv=a.type==='investment';bal[a.id]=inv?(+a.cash||0):isHSA(a)?hsaNow(a):(+a.bal||0);if(inv)hold[a.id]=+a.bal||0});
   for(let i=ti;i<=vi+1;i++){
     const list=i===vi?cur:evs(Math.floor(i/12),i%12);
     list.forEach(e=>{
@@ -437,7 +461,7 @@ function project(){
       }
     });
     {const dim=new Date(Math.floor(i/12),i%12+1,0).getDate(),fr=i===ti?Math.max(0,(dim-(+s0.slice(8,10)))/dim):1;
-      plan.accounts.forEach(a=>{if(a.type==='retirement'&&+a.ret>0)bal[a.id]*=Math.pow(1+a.ret/100,fr/12)})}
+      plan.accounts.forEach(a=>{if((a.type==='retirement'||isHSA(a))&&+a.ret>0)bal[a.id]*=Math.pow(1+a.ret/100,fr/12)})}
     if(i===vi){end={...bal};endH={...hold}}
   }
   const m=mk(view);
@@ -481,7 +505,7 @@ function catFor(desc,amt){
 const catList=()=>[...new Set([...plan.cats.map(c=>c.name),...RESERVED])];
 const tagList=()=>{const s=new Set();Object.values(tx).forEach(m=>m.items.forEach(t=>t.tag&&s.add(t.tag)));Object.values(plan.merch||{}).forEach(v=>v.tag&&s.add(v.tag));return[...s].sort()};
 function assetsDebts(){
-  let a=0,d=0;plan.accounts.forEach(x=>{if(isDebt(x))d+=+x.bal||0;else a+=(+x.bal||0)+(x.type==='investment'?(+x.cash||0):0)});return{a:r2(a),d:r2(d)};
+  let a=0,d=0;plan.accounts.forEach(x=>{if(isDebt(x))d+=+x.bal||0;else a+=(isHSA(x)?hsaNow(x):(+x.bal||0))+(x.type==='investment'?(+x.cash||0):0)});return{a:r2(a),d:r2(d)};
 }
 function snapNW(key,dt){const {a,d}=assetsDebts();(plan.nw=plan.nw||{})[key||TODAY.slice(0,7)]={a,d,dt:dt||TODAY}}
 
@@ -522,7 +546,7 @@ function ask(msg,label,yes){
 
 /* ---------- forms ---------- */
 const acctOpts=()=>[['','— none —'],...plan.accounts.map(a=>[a.id,a.name])];
-const spendOpts=()=>[['','— none —'],...plan.accounts.filter(a=>['checking','savings','cash','credit'].includes(a.type)).map(a=>[a.id,a.name])];
+const spendOpts=()=>[['','— none —'],...plan.accounts.filter(a=>['checking','savings','cash','credit','hsa'].includes(a.type)).map(a=>[a.id,a.name])];
 const debtOpts=()=>[['','— none —'],...plan.accounts.filter(isDebt).map(a=>[a.id,a.name])];
 const freqF=dateLabel=>[
   {k:'freq',l:'How often',t:'select',opts:FREQS},
@@ -530,8 +554,9 @@ const freqF=dateLabel=>[
   {k:'day2',l:'Second day of the month',t:'number',show:o=>o.freq==='semi',ph:'15'}
 ];
 const CONF={floor:'Floor (I expect at least this)',avg:'Average (a typical payout)',target:'Target (what I’m aiming for)'};
-const assetOpts=()=>[['','— none —'],...plan.accounts.filter(a=>!isDebt(a)&&!['retirement','property'].includes(a.type)).map(a=>[a.id,a.name])];
-const noInt=['credit','loan','investment','retirement','property'];
+const assetOpts=()=>[['','— none —'],...plan.accounts.filter(a=>!isDebt(a)&&!['retirement','hsa','property'].includes(a.type)).map(a=>[a.id,a.name])];
+const noInt=['credit','loan','investment','retirement','hsa','property'];
+const CONTRIB=o=>o.type==='retirement'||o.type==='hsa';
 const KINDS={
   income:{label:'income source',def:()=>({freq:'monthly',date:START(),conf:'avg'}),fields:()=>[
     {k:'name',l:'Source',req:1,ph:'Paycheck'},
@@ -553,7 +578,7 @@ const KINDS={
     {k:'cat',l:'Category',t:'select',opts:plan.cats.map(c=>[c.name,c.name])},
     {k:'auto',l:'Autopay is on',t:'checkbox'},
     {k:'planned',l:'Planned (what-if): keep out of totals until I include planned bills',t:'checkbox'}]},
-  accounts:{label:'account',def:()=>({type:'checking',divFreq:'quarterly',divMode:'cash',cfreq:'biweekly'}),fields:()=>[
+  accounts:{label:'account',def:()=>({type:'checking',divFreq:'quarterly',divMode:'cash',cfreq:'biweekly',cover:'self'}),fields:()=>[
     {k:'name',l:'Account name',req:1,ph:'Checking'},{k:'type',l:'Type',t:'select',opts:TYPES},
     {k:'bal',l:'Current balance (value for investments and property, amount owed for cards and loans)',t:'number',req:1},
     {k:'cash',l:'Buying power (cash sitting in the account)',t:'number',show:o=>o.type==='investment'},
@@ -561,13 +586,16 @@ const KINDS={
     {k:'divFreq',l:'How often dividends pay',t:'select',opts:[['monthly','Monthly'],['quarterly','Every 3 months'],['semiannual','Every 6 months'],['yearly','Yearly']],show:o=>o.type==='investment'&&o.divAmt>0},
     {k:'divDate',l:'Next dividend date',t:'date',req:1,show:o=>o.type==='investment'&&o.divAmt>0},
     {k:'divMode',l:'When a dividend pays',t:'select',opts:[['cash','Goes to buying power (cash)'],['reinvest','Auto-reinvested']],show:o=>o.type==='investment'&&o.divAmt>0},
-    {k:'contrib',l:'Your contribution per payment',t:'number',show:o=>o.type==='retirement',help:'Payroll deductions come out before your paycheck reaches the bank, so they are not counted as spending.'},
-    {k:'match',l:'Employer match per payment',t:'number',show:o=>o.type==='retirement'},
-    {k:'cfreq',l:'How often contributions are made',t:'select',opts:FREQS,show:o=>o.type==='retirement'&&(o.contrib>0||o.match>0)},
-    {k:'cdate',l:'Next contribution date',t:'date',req:1,show:o=>o.type==='retirement'&&(o.contrib>0||o.match>0)},
-    {k:'cday2',l:'Second day of the month',t:'number',show:o=>o.type==='retirement'&&(o.contrib>0||o.match>0)&&o.cfreq==='semi',ph:'15'},
-    {k:'cfrom',l:'Your contribution is paid from',t:'select',opts:[['','Payroll deduction (not from a bank account)'],...plan.accounts.filter(a=>['checking','savings','cash'].includes(a.type)).map(a=>[a.id,a.name])],show:o=>o.type==='retirement'&&o.contrib>0},
-    {k:'ret',l:'Expected annual return % (optional)',t:'number',show:o=>o.type==='retirement',help:'Only used for the projected balance.'},
+    {k:'contrib',l:'Your contribution per payment',t:'number',show:o=>CONTRIB(o),help:'Payroll deductions come out before your paycheck reaches the bank, so they are not counted as spending.'},
+    {k:'match',l:'Employer match or contribution per payment',t:'number',show:o=>CONTRIB(o)},
+    {k:'cfreq',l:'How often contributions are made',t:'select',opts:FREQS,show:o=>CONTRIB(o)&&(o.contrib>0||o.match>0)},
+    {k:'cdate',l:'Next contribution date',t:'date',req:1,show:o=>CONTRIB(o)&&(o.contrib>0||o.match>0)},
+    {k:'cday2',l:'Second day of the month',t:'number',show:o=>CONTRIB(o)&&(o.contrib>0||o.match>0)&&o.cfreq==='semi',ph:'15'},
+    {k:'cfrom',l:'Your contribution is paid from',t:'select',opts:[['','Payroll deduction (not from a bank account)'],...plan.accounts.filter(a=>['checking','savings','cash'].includes(a.type)).map(a=>[a.id,a.name])],show:o=>CONTRIB(o)&&o.contrib>0},
+    {k:'ret',l:'Expected annual return % (optional)',t:'number',show:o=>CONTRIB(o),help:'Only used for the projected balance.'},
+    {k:'cover',l:'HSA coverage',t:'select',opts:[['self','Just me (self-only)'],['family','Family']],show:o=>o.type==='hsa',help:'Sets the yearly IRS contribution limit. You and your employer share it.'},
+    {k:'age55',l:'I’m 55 or older (adds the catch-up amount to the limit)',t:'checkbox',show:o=>o.type==='hsa'},
+    {k:'ytd',l:'Contributed so far this year, you and employer (optional)',t:'number',show:o=>o.type==='hsa',help:'Used to check this year’s total against the limit.'},
     {k:'apy',l:'Interest rate (APY %)',t:'number',show:o=>!noInt.includes(o.type)},
     {k:'intday',l:'Day interest is credited',t:'number',show:o=>!noInt.includes(o.type)&&o.apy>0,ph:'Blank means the last day of the month'},
     {k:'limit',l:'Credit limit (optional)',t:'number',show:o=>o.type==='credit'},
@@ -588,8 +616,15 @@ const KINDS={
 function edit(kind,id){
   const K=KINDS[kind],list=plan[kind],cur=id?list.find(x=>x.id===id):null;
   openForm((id?'Edit ':'Add ')+K.label,K.fields(),cur||K.def(),o=>{
+    const was=cur?{bal:+cur.bal||0,ytd:+cur.ytd||0}:null;
     if(cur)Object.assign(cur,o);else list.push({id:uid(),...o});
-    if(kind==='accounts'){const a=cur||list[list.length-1];a.upd=TODAY;syncDue(a);snapNW()}
+    if(kind==='accounts'){
+      const a=cur||list[list.length-1];
+      /* an HSA balance date only moves when the balance does, so card purchases logged since stay counted */
+      if(!isHSA(a)||!was||was.bal!==(+a.bal||0)){a.upd=TODAY;a.updAt=Date.now()}
+      if(isHSA(a)&&(!was||was.ytd!==(+a.ytd||0)))a.ytdOn=TODAY;
+      syncDue(a);snapNW();
+    }
     savePlan();render();
   });
 }
@@ -621,13 +656,13 @@ const txFields=()=>[
   {k:'cat',l:'Category',t:'select',opts:catList().map(c=>[c,c])},
   {k:'acct',l:'Account',t:'select',opts:acctOpts()},
   {k:'tag',l:'Tag (optional)',list:tagList(),help:'A label that cuts across categories, like alcohol or work.'}];
-async function addTx(t){const nm=t.date.slice(0,7);await ensureTx(nm);tx[nm].items.push(t);saveTx(nm)}
+async function addTx(t){if(!t.at)t.at=Date.now();const nm=t.date.slice(0,7);await ensureTx(nm);tx[nm].items.push(t);saveTx(nm)}
 function learn(t){if(t.amt<0&&t.cat&&!NOSPEND.includes(t.cat)){(plan.merch=plan.merch||{})[t.desc.toLowerCase()]={desc:t.desc,cat:t.cat,tag:t.tag||'',acct:t.acct||''};savePlan()}}
 function editTx(id){
   const m=mk(view),old=id?tx[m].items.find(t=>t.id===id):null;
   const v=old?{...old,kind:old.amt>0?'in':'out',amt:Math.abs(old.amt)}:{date:TODAY.slice(0,7)===m?TODAY:m+'-01',kind:'out',cat:'Uncategorized'};
   openForm(old?'Edit transaction':'Add transaction',txFields(),v,async o=>{
-    const t={id:old?.id||uid(),date:o.date,desc:o.desc,amt:o.kind==='in'?Math.abs(o.amt):-Math.abs(o.amt),cat:o.cat,acct:o.acct,tag:o.tag};
+    const t={id:old?.id||uid(),date:o.date,desc:o.desc,amt:o.kind==='in'?Math.abs(o.amt):-Math.abs(o.amt),cat:o.cat,acct:o.acct,tag:o.tag,at:old?.at};
     if(old){tx[m].items=tx[m].items.filter(x=>x.id!==old.id);saveTx(m)}
     await addTx(t);learn(t);render();
   });
@@ -862,7 +897,7 @@ function openImport(){
   };
   $('#igo').onclick=async()=>{
     const a=$('#ia').value,ms={};
-    fresh.forEach(r=>{const m=r.date.slice(0,7),mm=plan.merch?.[r.desc.toLowerCase()];(ms[m]=ms[m]||[]).push({id:uid(),date:r.date,desc:r.desc,amt:r.amt,cat:catFor(r.desc,r.amt),acct:a,tag:mm?.tag||''})});
+    fresh.forEach(r=>{const m=r.date.slice(0,7),mm=plan.merch?.[r.desc.toLowerCase()];(ms[m]=ms[m]||[]).push({id:uid(),at:Date.now(),date:r.date,desc:r.desc,amt:r.amt,cat:catFor(r.desc,r.amt),acct:a,tag:mm?.tag||''})});
     for(const m of Object.keys(ms)){await ensureTx(m);tx[m].items.push(...ms[m]);saveTx(m)}
     const top=Object.keys(ms).sort((x,y)=>ms[y].length-ms[x].length)[0];
     if(top)view={y:+top.slice(0,4),m:+top.slice(5,7)-1};
@@ -883,9 +918,9 @@ function cal(list,tips){
   }
   return`<div class="cal">${h}</div>`;
 }
-const isBudgetOut=e=>e.t==='out'&&!e.card;
+const isBudgetOut=e=>e.t==='out'&&!e.card&&!isHSA(acct(e.acct));
 function logged(m){
-  const k=KICK(),items=(tx[m]||{items:[]}).items.filter(t=>!NOSPEND.includes(t.cat)&&!(k&&m===k.slice(0,7)&&t.date<k));
+  const k=KICK(),items=(tx[m]||{items:[]}).items.filter(t=>!NOSPEND.includes(t.cat)&&!hsaPaid(t)&&!(k&&m===k.slice(0,7)&&t.date<k));
   const by={};items.forEach(t=>{by[t.cat]=(by[t.cat]||0)-t.amt});return{items,by,total:Object.values(by).reduce((s,v)=>s+v,0)};
 }
 function budget(list){
@@ -934,13 +969,13 @@ function vKick(){
     <td class="num" data-l="Estimate now">${s.items.length?`<button class="lnk" data-act="kest" data-id="${a.id}" data-v="${est}">${f2(est)}</button>`:'—'}</td>
     <td class="num" data-l="Starting balance"><input class="mini" type="number" step="any" value="${+a.bal||0}" data-kb="${a.id}" aria-label="Starting balance of ${esc(a.name)}">${a.type==='investment'?`<div class="since" style="margin-top:4px">buying power</div><input class="mini" type="number" step="any" value="${r2((+a.cash||0)+s.dc)}" data-kc="${a.id}" aria-label="Buying power of ${esc(a.name)}">`:''}</td>
     ${extra?`<td class="num" data-l="Next statement"><input class="mini" type="number" step="any" min="0" value="${a.duedate&&a.duedate>=k&&+a.stmt?+a.stmt:''}" placeholder="0" data-ks="${a.id}" aria-label="Next statement balance of ${esc(a.name)}"></td><td data-l="Due day (fixed)"><input class="mini" style="width:70px" type="number" min="1" max="31" step="1" value="${+a.dueDay||''}" placeholder="day" data-kdd="${a.id}" aria-label="Due day of ${esc(a.name)}"><div class="since">${+a.dueDay?'next due '+dl(nextDue(a,k)):''}</div></td><td data-l="Pay on">${(()=>{const due=nextDue(a,k),key=`out:c-${a.id}:${due}`,def=due?addDays(due,-(+a.lead||0)):'';return`<input class="mid" type="date" value="${esc(plan.payOn?.[key]||def)}" data-kp="${a.id}" data-def="${esc(def)}" aria-label="Pay date for ${esc(a.name)}">`})()}</td>`:''}<td></td></tr>`}).join(''):'';
-  const A=plan.accounts,cash=A.filter(a=>['checking','savings','cash'].includes(a.type)),inv=A.filter(a=>['investment','retirement','property'].includes(a.type)),cards=A.filter(a=>a.type==='credit'),loans=A.filter(a=>a.type==='loan');
+  const A=plan.accounts,cash=A.filter(a=>['checking','savings','cash'].includes(a.type)),inv=A.filter(a=>['investment','retirement','hsa','property'].includes(a.type)),cards=A.filter(a=>a.type==='credit'),loans=A.filter(a=>a.type==='loan');
   const head=x=>`<thead><tr><th>Account and what's scheduled since the last update</th><th class="num">Last recorded</th><th class="num">Estimate now</th><th class="num">Starting balance</th>${x?'<th class="num">Next statement</th><th>Due day</th><th>Pay on</th>':''}<th></th></tr></thead>`;
   return`<div class="sec"><h2>Kickoff: set your starting point</h2>
   <p class="muted" style="max-width:70ch">Starting mid-month mixed old and new money together. The kickoff draws a line: enter each balance as it stands at the start of the kickoff day, before anything dated that day posts. Everything earlier becomes history. Budgets, projections and overdue checks start from here.</p>
   <div class="row"><label for="kdate" class="muted">Kickoff day</label><input id="kdate" type="date" class="mid" value="${esc(k)}" data-act="kdate"><button class="btn sm" data-act="kuse">Use all estimates</button></div>
   <p class="muted small">Estimates add what was scheduled between each account's last update and the kickoff day. Anything off-schedule, like a down payment or a transfer, isn't included, so type the real balance from your bank app when you can.</p>
-  <div class="scroll"><table class="kt">${head(false)}<tbody>${grp('Cash accounts',cash)}${grp('Investments and retirement',inv)}${grp('Loans',loans)}</tbody></table></div>
+  <div class="scroll"><table class="kt">${head(false)}<tbody>${grp('Cash accounts',cash)}${grp('Investments, retirement and HSA',inv)}${grp('Loans',loans)}</tbody></table></div>
   ${cards.length?`<h2 style="margin-top:22px">Credit cards</h2><p class="muted small">Enter what you owe now, and the statement you'll pay next with its due date. Use 0 for the statement if nothing is due.</p><div class="scroll"><table class="kt">${head(true)}<tbody>${grp('Cards',cards,true)}</tbody></table></div>`:''}
   ${kd.length?`<h2 style="margin-top:22px">Scheduled on ${dl(k)}</h2><p class="muted small">These are in your first month's budget. Check any that already came out of the balances above, so they aren't subtracted twice.</p><div class="scroll"><table><tbody>${kd.map(e=>`<tr><td style="width:40px"><input type="checkbox" data-act="kdone" data-key="${esc(e.key)}"${plan.done[e.key]?' checked':''} aria-label="${esc(e.name)} already reflected"></td><td>${esc(e.name)}</td><td>${esc(acctName(e.acct))}</td><td class="num">${e.t==='out'?'−':'+'}${f2(e.amt)}</td></tr>`).join('')}</tbody></table></div>`:''}
   <div class="row" style="margin-top:18px"><button class="btn pri" data-act="kgo">Start budgeting from ${dl(k)}</button><button class="btn" data-tab="overview">Not now</button></div></div>`;
@@ -950,7 +985,7 @@ function kickGo(){
   const miss=[...document.querySelectorAll('[data-ks]')].filter(el=>parseFloat(el.value)>0&&!(+document.querySelector(`[data-kdd="${el.dataset.ks}"]`).value)).map(el=>acctName(el.dataset.ks));
   if(miss.length){toast(`Add a due day for ${miss.join(', ')}`);return}
   plan.kickoff=k;
-  document.querySelectorAll('[data-kb]').forEach(el=>{const a=acct(el.dataset.kb);if(a&&el.value!==''){a.bal=r2(parseFloat(el.value)||0);a.upd=k}});
+  document.querySelectorAll('[data-kb]').forEach(el=>{const a=acct(el.dataset.kb);if(a&&el.value!==''){a.bal=r2(parseFloat(el.value)||0);a.upd=k;delete a.updAt}});
   document.querySelectorAll('[data-kc]').forEach(el=>{const a=acct(el.dataset.kc);if(a&&el.value!=='')a.cash=r2(parseFloat(el.value)||0)});
   document.querySelectorAll('[data-ks]').forEach(el=>{const a=acct(el.dataset.ks);if(a)a.stmt=Math.max(0,r2(parseFloat(el.value)||0))});
   document.querySelectorAll('[data-kdd]').forEach(el=>{const a=acct(el.dataset.kdd);if(!a)return;const d=Math.round(+el.value);if(d>=1&&d<=31){a.dueDay=d;a.duedate=nextDue(a,k)}
@@ -978,7 +1013,8 @@ function vOverview(){
   const goals=plan.goals.reduce((s,g)=>s+goalNeed(g),0),free=inc-out-goals,L=logged(mk(view)),left=free-L.total;
   const dim=new Date(view.y,view.m+1,0).getDate(),isCur=mk(view)===TODAY.slice(0,7),firstDay=k&&mk(view)===k.slice(0,7)&&k>TODAY?+k.slice(8,10):1;
   const daysLeft=isCur?dim-now.getDate()+1:(mk(view)>TODAY.slice(0,7)?dim-firstDay+1:0);
-  const estIn=sum(list.filter(e=>e.t==='in'&&e.variable&&!e.hasActual&&cnt(e))),contribTot=sum(list.filter(e=>e.contrib));
+  const estIn=sum(list.filter(e=>e.t==='in'&&e.variable&&!e.hasActual&&cnt(e))),contribTot=sum(list.filter(e=>e.contrib&&!e.hsa)),hsaIn=sum(list.filter(e=>e.contrib&&e.hsa));
+  const hsaOut=-(tx[mk(view)]?.items||[]).filter(t=>hsaPaid(t)&&!NOSPEND.includes(t.cat)).reduce((s,t)=>s+t.amt,0),hsaBills=sum(list.filter(e=>e.t==='out'&&!e.card&&isHSA(acct(e.acct))));
   return`${kickBanner()}<div class="eq">
     <div class="t"><small>Income</small><b>${f0(inc)}</b></div><span class="op">−</span>
     <div class="t"><small>Bills</small><b>${f0(out)}</b></div><span class="op">−</span>
@@ -986,12 +1022,12 @@ function vOverview(){
     <div class="t free"><small>Spending money</small><b class="${free<0?'neg':'pos'}">${f0(free)}</b></div></div>
   <div class="left"><span class="muted">Logged so far</span><b>${f0(L.total)}</b><span class="muted">Left to spend</span><b class="${left<0?'neg':'pos'}">${f0(left)}</b>${daysLeft>0?`<span class="muted">About <b style="font-size:17px">${f0(Math.max(0,left)/daysLeft)}</b> a day for ${daysLeft} days</span>`:''}</div>
   <div class="note">${list.some(e=>e.passive)?`<label class="chk"><input type="checkbox" data-act="intin"${plan.interestIn?' checked':''}> Count interest and dividends as income</label>`:''}${plan.bills.some(b=>b.planned)?`<label class="chk"><input type="checkbox" data-act="planned"${plan.showPlanned?' checked':''}> Include planned bills</label>`:''}
-    ${cardsOut?`<span>Card payments this month total ${f0(cardsOut)}. They pay off earlier charges, so they're on the calendar but not counted above.</span>`:''}${planned?`<span>Planned bills would add ${f0(planned)}.</span>`:''}${intr&&!plan.interestIn?`<span>${f0(intr)} of interest and dividends expected, not counted.</span>`:''}${estIn?`<span>${f0(estIn)} of income is an estimate. Enter the real amount below once it lands.</span>`:''}${contribTot?`<span>${f0(contribTot)} goes into retirement this month, including employer money.</span>`:''}</div>
+    ${cardsOut?`<span>Card payments this month total ${f0(cardsOut)}. They pay off earlier charges, so they're on the calendar but not counted above.</span>`:''}${planned?`<span>Planned bills would add ${f0(planned)}.</span>`:''}${intr&&!plan.interestIn?`<span>${f0(intr)} of interest and dividends expected, not counted.</span>`:''}${estIn?`<span>${f0(estIn)} of income is an estimate. Enter the real amount below once it lands.</span>`:''}${contribTot?`<span>${f0(contribTot)} goes into retirement this month, including employer money.</span>`:''}${hsaIn?`<span>${f0(hsaIn)} goes into your HSA this month, including employer money.</span>`:''}${hsaOut||hsaBills?`<span>${f0(hsaOut+hsaBills)} paid from your HSA this month isn't counted above, since it comes out of the HSA.</span>`:''}</div>
   ${stale.length?`<div class="alert"><b>New statement?</b>${stale.map(a=>`<div class="tip"><span>${esc(a.name)} was due ${dl(a.duedate)}. Enter the next statement, due ${dl(nextDue(a,addDays(a.duedate,1)))}.</span><button class="btn sm" data-act="nextstmt" data-id="${a.id}">New statement</button></div>`).join('')}</div>`:''}
   ${tipsHtml(tips)}
   <div class="sec"><h2>Log spending</h2>${qaHtml()}</div>
   <div class="sec">${cal(list,tips)}</div>
-  <div class="sec"><h2>Money in and out</h2>${list.length?`<div class="scroll"><table><thead><tr><th>Done</th><th>Date</th><th>Item</th><th>Account</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead><tbody>${list.map(e=>`<tr class="${plan.done[e.key]?'done':e.date<TODAY?'past':''}${e.short?' short':''}"><td><input type="checkbox" data-act="done" data-key="${esc(e.key)}"${plan.done[e.key]?' checked':''} aria-label="Mark ${esc(e.name)} done"></td><td>${e.pay?payCell(e):dl(e.date)}</td><td>${esc(e.name)}${e.planned?'<span class="pill">planned</span>':''}${e.card?'<span class="pill">card payment</span>':''}${e.dividend?`<span class="pill">${e.mode==='reinvest'?'reinvested':'to buying power'}</span>`:''}${e.contrib?'<span class="pill">retirement</span>':''}${acct(e.to)&&isDebt(acct(e.to))?'<span class="pill">loan</span>':''}</td><td>${esc(acctName(e.acct))}</td><td class="num ${e.t==='in'?'pos':''}">${amtCell(e)}</td><td class="num ${e.after<0&&!e.debt?'neg':''}">${e.after==null?'':e.debt?'owe '+f0(e.after):f0(e.after)}</td></tr>`).join('')}</tbody></table></div>
+  <div class="sec"><h2>Money in and out</h2>${list.length?`<div class="scroll"><table><thead><tr><th>Done</th><th>Date</th><th>Item</th><th>Account</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead><tbody>${list.map(e=>`<tr class="${plan.done[e.key]?'done':e.date<TODAY?'past':''}${e.short?' short':''}"><td><input type="checkbox" data-act="done" data-key="${esc(e.key)}"${plan.done[e.key]?' checked':''} aria-label="Mark ${esc(e.name)} done"></td><td>${e.pay?payCell(e):dl(e.date)}</td><td>${esc(e.name)}${e.planned?'<span class="pill">planned</span>':''}${e.card?'<span class="pill">card payment</span>':''}${e.dividend?`<span class="pill">${e.mode==='reinvest'?'reinvested':'to buying power'}</span>`:''}${e.contrib?`<span class="pill">${e.hsa?'HSA':'retirement'}</span>`:''}${!e.contrib&&e.t==='out'&&isHSA(acct(e.acct))?'<span class="pill">HSA</span>':''}${acct(e.to)&&isDebt(acct(e.to))?'<span class="pill">loan</span>':''}</td><td>${esc(acctName(e.acct))}</td><td class="num ${e.t==='in'?'pos':''}">${amtCell(e)}</td><td class="num ${e.after<0&&!e.debt?'neg':''}">${e.after==null?'':e.debt?'owe '+f0(e.after):f0(e.after)}</td></tr>`).join('')}</tbody></table></div>
   <p class="muted" style="font-size:13px">Balances start from your account balances and count unchecked items from ${dl(START())} on. Check an item once it shows in the balance.</p>`:'<div class="empty">Nothing scheduled this month.</div>'}</div>
   <div class="sec"><h2>Spending vs budget</h2>${budget(list)}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="catadd">Add category</button><span class="muted" style="font-size:13px">Bills count toward their category by due date. Logged spending leaves out transfers and anything marked Bill payment.</span></div></div>`;
 }
@@ -1014,7 +1050,7 @@ function vList(kind){
   return`<div class="sec">${head}<div class="scroll"><table><thead><tr><th>${isB?'Bill':'Source'}</th><th class="num">Amount</th><th>Schedule</th><th>${isB?'Pays from':'Deposits into'}</th>${isB?'<th>Category</th>':''}<th></th></tr></thead><tbody>${rows}</tbody></table></div></div>${history(isB?'out':'in')}`;
 }
 function vAccounts(){
-  const {end,endH}=project(),A=plan.accounts,as=A.filter(a=>['checking','savings','cash'].includes(a.type)),rt=A.filter(a=>a.type==='retirement'),inv=A.filter(a=>a.type==='investment'),prop=A.filter(a=>a.type==='property'),cards=A.filter(a=>a.type==='credit'),loans=A.filter(a=>a.type==='loan');
+  const {end,endH}=project(),A=plan.accounts,as=A.filter(a=>['checking','savings','cash'].includes(a.type)),rt=A.filter(a=>a.type==='retirement'),hs=A.filter(isHSA),inv=A.filter(a=>a.type==='investment'),prop=A.filter(a=>a.type==='property'),cards=A.filter(a=>a.type==='credit'),loans=A.filter(a=>a.type==='loan');
   const {a:AS,d:DB}=assetsDebts();
   const endTh=end?`<th class="num">End of ${MON[view.m]}</th>`:'';
   const balCell=a=>`<td class="num"><input class="mini" type="number" step="any" value="${+a.bal||0}" data-act="bal" data-id="${a.id}" aria-label="Balance of ${esc(a.name)}"><div class="since">${a.upd?dl(a.upd):''}</div></td>`;
@@ -1028,6 +1064,14 @@ function vAccounts(){
   ${as.length?`<div class="sec"><h2>Cash</h2>${tbl(as.map(a=>`<tr><td>${esc(a.name)}</td><td>${esc(TYPES.find(t=>t[0]===a.type)?.[1]||'')}</td>${balCell(a)}<td class="num"><input class="mini" style="width:76px" type="number" step="any" min="0" value="${+a.apy||''}" placeholder="0" data-act="apy" data-id="${a.id}" aria-label="APY of ${esc(a.name)}"></td><td class="num">${hasInt(a)?f2(mInt(a)):'—'}</td>${endCell(a)}${btns(a)}</tr>`).join(''),`<th>Name</th><th>Type</th><th class="num">Balance</th><th class="num">APY %</th><th class="num">Interest a month</th>${endTh}<th></th>`)}${intTot?`<p class="muted small">Estimated interest: ${f2(intTot)} a month, about ${f0(intTot*12)} a year.</p>`:''}</div>`:''}
   ${inv.length?`<div class="sec"><h2>Investments</h2>${tbl(inv.map(a=>`<tr><td>${esc(a.name)}</td>${balCell(a)}<td class="num"><input class="mini" type="number" step="any" value="${+a.cash||0}" data-act="cash" data-id="${a.id}" aria-label="Buying power of ${esc(a.name)}"></td><td class="num">${f0((+a.bal||0)+(+a.cash||0))}</td><td>${+a.divAmt>0?`${f2(+a.divAmt)}, ${esc(FREQS.find(f=>f[0]===(a.divFreq||'quarterly'))?.[1]||'')}, ${a.divMode==='reinvest'?'reinvested':'to buying power'}`:'—'}</td>${end?`<td class="num">${f0(endH[a.id])} invested<br>${f0(end[a.id])} cash</td>`:''}${btns(a)}</tr>`).join(''),`<th>Name</th><th class="num">Invested</th><th class="num">Buying power</th><th class="num">Total</th><th>Dividends</th>${endTh}<th></th>`)}</div>`:''}
   ${rt.length?`<div class="sec"><h2>Retirement</h2>${tbl(rt.map(a=>{const n=PER[a.cfreq||'biweekly']||0,you=+a.contrib||0,er=+a.match||0;return`<tr><td>${esc(a.name)}</td>${balCell(a)}<td>${you>0||er>0?`${you>0?`You ${f2(you)} (${a.cfrom?'from '+esc(acctName(a.cfrom)):'payroll'})`:''}${you>0&&er>0?', ':''}${er>0?`employer ${f2(er)}`:''}<div class="muted" style="font-size:13px">${esc(sched({freq:a.cfreq,date:a.cdate,day2:a.cday2}))}</div>`:'—'}</td><td class="num">${(you+er)>0?f0((you+er)*n):'—'}</td>${end?`<td class="num">${f0(end[a.id])}</td>`:''}${btns(a)}</tr>`}).join(''),`<th>Name</th><th class="num">Balance</th><th>Contributions</th><th class="num">Per year</th>${endTh}<th></th>`)}</div>`:''}
+  ${hs.length?`<div class="sec"><h2>Health savings (HSA)</h2>${tbl(hs.map(a=>{
+    const n=PER[a.cfreq||'biweekly']||0,you=+a.contrib||0,er=+a.match||0,sp=hsaSpent(a),Y=hsaYear(a),over=Y.total>Y.limit;
+    return`<tr><td>${esc(a.name)}</td>${balCell(a)}<td class="num">${f2(hsaNow(a))}<div class="since">${sp?`${f2(sp)} on the card since ${dl(a.upd)}`:'no card purchases since'}</div></td>
+    <td>${you>0||er>0?`${you>0?`You ${f2(you)} (${a.cfrom?'from '+esc(acctName(a.cfrom)):'payroll'})`:''}${you>0&&er>0?', ':''}${er>0?`employer ${f2(er)}`:''}<div class="muted" style="font-size:13px">${esc(sched({freq:a.cfreq,date:a.cdate,day2:a.cday2}))}</div>`:'—'}</td>
+    <td class="num">${(you+er)>0?f0((you+er)*n):'—'}</td>
+    <td class="num ${over?'neg':''}">${f0(Y.total)} of ${f0(Y.limit)}<div class="since ${over?'neg':''}">${over?`${f0(Y.total-Y.limit)} over the ${Y.limitYear} limit`:`${f0(Y.limit-Y.total)} room left`}${Y.so?'':'. Add what’s gone in so far this year with Edit'}</div></td>
+    ${end?`<td class="num">${f0(end[a.id])}</td>`:''}${btns(a)}</tr>`}).join(''),`<th>Name</th><th class="num">Balance</th><th class="num">Available now</th><th>Contributions</th><th class="num">Per year</th><th class="num">This year vs limit</th>${endTh}<th></th>`)}
+  <p class="muted small">Pay with the HSA card by choosing the HSA under Paid with when you log spending. Those purchases lower the HSA's available balance and aren't counted against your spending money. When you type a new balance from your HSA provider, purchases logged before then count as already in it. The yearly limit covers your money and your employer's together.</p></div>`:''}
   ${prop.length?`<div class="sec"><h2>Vehicles and property</h2>${tbl(prop.map(a=>`<tr><td>${esc(a.name)}</td>${balCell(a)}${btns(a)}</tr>`).join(''),'<th>Name</th><th class="num">Value</th><th></th>')}</div>`:''}
   ${cards.length?`<div class="sec"><h2>Credit cards</h2>${tbl(cards.map(a=>`<tr><td>${esc(a.name)}</td>${balCell(a)}${limCells(a)}<td class="num"><input class="mini" type="number" step="any" min="0" value="${+a.stmt||''}" placeholder="0" data-act="stmt" data-id="${a.id}" aria-label="Statement balance of ${esc(a.name)}"></td><td>${a.duedate?wdl(a.duedate):'—'}<div class="since">${+a.dueDay?'every '+ord(+a.dueDay):'set a due day'}</div></td><td>${(()=>{if(!a.duedate||!+a.stmt)return'—';const key=`out:c-${a.id}:${a.duedate}`,v=plan.payOn?.[key]||addDays(a.duedate,-(+a.lead||0));return`<input class="mid" type="date" value="${v}" data-act="payon" data-key="${esc(key)}" aria-label="Pay date for ${esc(a.name)}"><div class="since ${v>a.duedate?'neg':''}">${v>a.duedate?'after the due date':plan.payOn?.[key]?'moved':'default'}</div>`})()}</td><td class="num"><input class="mini" type="number" step="any" min="0" value="${+a.typ||''}" placeholder="auto" data-act="typ" data-id="${a.id}" aria-label="Typical monthly payment of ${esc(a.name)}"></td><td>${esc(acctName(a.payfrom))}</td>${endCell(a)}<td class="act"><button class="btn sm" data-act="nextstmt" data-id="${a.id}">New statement</button></td>${btns(a)}</tr>`).join(''),`<th>Name</th><th class="num">Owed now</th><th class="num">Limit</th><th class="num">Used</th><th class="num">Statement</th><th>Due</th><th>Pay on</th><th class="num">Typical monthly</th><th>Pays from</th>${endTh}<th></th><th></th>`)}<p class="muted small">Due dates follow each card's fixed due day. The pay date defaults to the due date, or earlier if you set a usual lead time, and you can move any single payment. The statement is scheduled on its pay date. Later months use your typical payment, or an estimate from bills and logged spending on the card when that's blank.</p></div>`:''}
   ${loans.length?`<div class="sec"><h2>Loans</h2>${tbl(loans.map(a=>`<tr><td>${esc(a.name)}${a.note?`<div class="muted small">${esc(a.note)}</div>`:''}</td>${balCell(a)}<td class="num">${+a.apr?(+a.apr)+'%':'—'}</td><td class="num">${+a.min?f2(+a.min):'—'}</td><td>${esc(payoff(a))}</td>${endCell(a)}${btns(a)}</tr>`).join(''),`<th>Name</th><th class="num">Owed</th><th class="num">APR</th><th class="num">Payment</th><th>Payoff</th>${endTh}<th></th>`)}</div>`:''}`;
@@ -1069,8 +1113,8 @@ function txFiltered(){
   return items.filter(t=>(!q||t.desc.toLowerCase().includes(q))&&(!fcat||t.cat===fcat)&&(!ftag||t.tag===ftag)).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
 }
 function txSum(){
-  const l=txFiltered().filter(t=>!NOSPEND.includes(t.cat)),sp=-l.reduce((s,t)=>s+t.amt,0);
-  return`${l.length} purchases, ${f2(sp)} spent`;
+  const l=txFiltered().filter(t=>!NOSPEND.includes(t.cat)),sp=-l.reduce((s,t)=>s+t.amt,0),h=-l.filter(hsaPaid).reduce((s,t)=>s+t.amt,0);
+  return`${l.length} purchases, ${f2(sp)} spent${h?`, ${f2(h)} of it from your HSA`:''}`;
 }
 function txRows(){
   const l=txFiltered(),cl=catList();
@@ -1176,6 +1220,9 @@ async function render(){
   if(!plan)return;
   const i=view.y*12+view.m,p=`${Math.floor((i-1)/12)}-${pad((i-1)%12+1)}`;
   await ensureTx(mk(view));await ensureTx(p);
+  /* HSA balances subtract card purchases since the balance date, so load those months (up to two years) */
+  const ci=now.getFullYear()*12+now.getMonth();
+  for(const a of plan.accounts.filter(isHSA))for(let j=Math.max(a.upd?mi(a.upd):ci,ci-24);j<=ci;j++)await ensureTx(`${Math.floor(j/12)}-${pad(j%12+1)}`);
   if(tab==='trends'){if(!allLoaded){for(const m of await allMonths())await ensureTx(m);allLoaded=true}for(let j=i-5;j<=i;j++)await ensureTx(`${Math.floor(j/12)}-${pad(j%12+1)}`)}
   paint();
 }
@@ -1265,7 +1312,7 @@ document.addEventListener('change',e=>{
   else if(act==='typ'){const a=A();if(a){a.typ=Math.max(0,num());savePlan();paint()}}
   else if(act==='payon'){setPay(b.dataset.key,b.value);paint();if(b.value)toast(`Payment moved to ${dl(b.value)}`)}
   else if(act==='stmt'){const a=A();if(a){a.stmt=Math.max(0,num());savePlan();paint()}}
-  else if(act==='bal'){const a=A();if(a){a.bal=num();a.upd=TODAY;snapNW();savePlan();paint()}}
+  else if(act==='bal'){const a=A();if(a){a.bal=num();a.upd=TODAY;a.updAt=Date.now();snapNW();savePlan();paint()}}
   else if(act==='tcat'){const m=mk(view),t=tx[m].items.find(x=>x.id===id);if(t){t.cat=b.value;saveTx(m);learn(t);$('#txs').textContent=txSum()}}
 });
 
