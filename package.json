@@ -33,6 +33,6 @@
     }
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.135.0"
+    "pdfjs-dist": "^6.5.438"
   }
 }

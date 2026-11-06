@@ -1,9 +1,16 @@
-// The page's only way to reach the main process: the API key and Claude calls for statement reading.
+// The page's only way to reach the main process: local AI through Ollama and PDF text.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('budgeterDesktop', {
-  hasKey: () => ipcRenderer.invoke('claude:hasKey'),
-  setKey: key => ipcRenderer.invoke('claude:setKey', key),
-  clearKey: () => ipcRenderer.invoke('claude:clearKey'),
-  read: req => ipcRenderer.invoke('claude:read', req)
+  status: () => ipcRenderer.invoke('ai:status'),
+  json: req => ipcRenderer.invoke('ai:json', req),
+  // onText gets the whole answer so far each time more arrives
+  ask: (req, onText) => {
+    const id = Math.random().toString(36).slice(2);
+    const h = (e, m) => { if (m.id === id) onText(m.text); };
+    ipcRenderer.on('ai:chunk', h);
+    return { id, done: ipcRenderer.invoke('ai:ask', { ...req, id }).finally(() => ipcRenderer.removeListener('ai:chunk', h)) };
+  },
+  stop: id => ipcRenderer.invoke('ai:stop', id),
+  pdfText: bytes => ipcRenderer.invoke('pdf:text', bytes)
 });

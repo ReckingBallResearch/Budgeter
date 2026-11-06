@@ -1,7 +1,5 @@
-const { app, BrowserWindow, shell, Menu, ipcMain, safeStorage } = require('electron');
+const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron');
 const path = require('path');
-const fs = require('fs');
-const { Anthropic } = require('@anthropic-ai/sdk');
 
 // One window only, so two copies never write the same data at once.
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -26,68 +24,101 @@ function createWindow() {
   });
 }
 
-/* ---------- Claude, for reading statement screenshots ---------- */
-// The API key is encrypted with the macOS Keychain and never leaves the main process.
-const keyFile = () => path.join(app.getPath('userData'), 'anthropic-key.bin');
-function readKey() {
-  try { return safeStorage.decryptString(fs.readFileSync(keyFile())); } catch (e) { return null; }
-}
+/* ---------- local AI through Ollama, for reading statements and talking about spending ---------- */
+// Everything stays on this Mac: Ollama runs the model locally on its default port.
+const OLLAMA = process.env.OLLAMA_HOST ? `http://${process.env.OLLAMA_HOST.replace(/^https?:\/\//, '')}` : 'http://127.0.0.1:11434';
 const fromApp = e => (e.senderFrame?.url || '').startsWith('file://');
-function errCode(err) {
-  if (err instanceof Anthropic.AuthenticationError || err instanceof Anthropic.PermissionDeniedError) return { code: 'bad_key' };
-  if (err instanceof Anthropic.RateLimitError) return { code: 'rate_limited' };
-  if (err instanceof Anthropic.BadRequestError) return { code: 'bad_request', message: err.message };
-  if (err instanceof Anthropic.APIConnectionError) return { code: 'offline' };
-  return { code: 'upstream_error' };
+
+async function ollama(route, body, timeoutMs = 300000) {
+  let res;
+  try {
+    res = await fetch(OLLAMA + route, { method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs) });
+  } catch (err) {
+    throw { code: err.name === 'TimeoutError' ? 'timeout' : 'offline' };
+  }
+  if (!res.ok) {
+    const msg = (await res.json().catch(() => ({}))).error || res.statusText;
+    throw { code: res.status === 404 ? 'no_model' : 'ai_error', message: msg };
+  }
+  return res;
 }
-const TX_SCHEMA = {
-  type: 'object',
-  properties: {
-    transactions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: { date: { type: 'string' }, description: { type: 'string' }, amount: { type: 'number' } },
-        required: ['date', 'description', 'amount'],
-        additionalProperties: false
+const fail = err => ({ ok: false, code: err.code || 'ai_error', message: err.message || '' });
+
+ipcMain.handle('ai:status', async e => {
+  if (!fromApp(e)) return { running: false, models: [] };
+  try {
+    const r = await (await ollama('/api/tags', null, 3000)).json();
+    return { running: true, models: (r.models || []).map(m => m.name) };
+  } catch (err) { return { running: false, models: [] }; }
+});
+
+// One answer as JSON, shaped by `schema`; images are base64 strings.
+ipcMain.handle('ai:json', async (e, req) => {
+  if (!fromApp(e)) return { ok: false, code: 'ai_error' };
+  try {
+    const res = await ollama('/api/chat', {
+      model: req.model, stream: false, format: req.schema,
+      options: { temperature: 0, num_ctx: req.ctx || 8192 },
+      messages: [{ role: 'user', content: String(req.prompt || ''), images: req.images?.length ? req.images : undefined }]
+    });
+    const out = await res.json();
+    try { return { ok: true, data: JSON.parse(out.message?.content || '') }; } catch (err) { return { ok: false, code: 'invalid_json' }; }
+  } catch (err) { return fail(err); }
+});
+
+// A chat answer, streamed back to the page as it's written.
+const asks = new Map();
+ipcMain.handle('ai:ask', async (e, req) => {
+  if (!fromApp(e)) return { ok: false, code: 'ai_error' };
+  const ctl = new AbortController();
+  asks.set(req.id, ctl);
+  try {
+    const res = await ollama('/api/chat', { model: req.model, stream: true, options: { temperature: 0.3, num_ctx: req.ctx || 16384 }, messages: req.messages });
+    const dec = new TextDecoder();
+    let buf = '', text = '';
+    for await (const chunk of res.body) {
+      if (ctl.signal.aborted) break;
+      buf += dec.decode(chunk, { stream: true });
+      let nl;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const m = JSON.parse(line);
+        if (m.error) throw { code: 'ai_error', message: m.error };
+        if (m.message?.content) { text += m.message.content; e.sender.send('ai:chunk', { id: req.id, text }); }
       }
     }
-  },
-  required: ['transactions'],
-  additionalProperties: false
-};
-
-ipcMain.handle('claude:hasKey', e => fromApp(e) && !!readKey());
-ipcMain.handle('claude:setKey', async (e, key) => {
-  if (!fromApp(e)) return { ok: false, code: 'bad_request' };
-  key = String(key || '').trim();
-  if (!key.startsWith('sk-ant-')) return { ok: false, code: 'bad_key' };
-  try { await new Anthropic({ apiKey: key }).models.list({ limit: 1 }); }
-  catch (err) { return { ok: false, ...errCode(err) }; }
-  if (!safeStorage.isEncryptionAvailable()) return { ok: false, code: 'no_keychain' };
-  fs.writeFileSync(keyFile(), safeStorage.encryptString(key), { mode: 0o600 });
-  return { ok: true };
+    return ctl.signal.aborted ? { ok: false, code: 'cancelled', text } : { ok: true, text };
+  } catch (err) { return fail(err); }
+  finally { asks.delete(req.id); }
 });
-ipcMain.handle('claude:clearKey', e => { if (fromApp(e)) { try { fs.unlinkSync(keyFile()); } catch (err) {} } return true; });
-ipcMain.handle('claude:read', async (e, req) => {
-  const key = fromApp(e) && readKey();
-  if (!key) return { ok: false, code: 'no_key' };
-  const images = (req.images || []).map(i => ({ type: 'image', source: { type: 'base64', media_type: i.type, data: i.data } }));
+ipcMain.handle('ai:stop', (e, id) => { asks.get(id)?.abort(); return true; });
+
+// Text of a PDF, one string per page, with each line's pieces in reading order.
+let pdfjs;
+ipcMain.handle('pdf:text', async (e, bytes) => {
+  if (!fromApp(e)) return { ok: false, code: 'pdf_error' };
   try {
-    const res = await new Anthropic({ apiKey: key }).beta.messages.create({
-      model: 'claude-opus-5-5',
-      max_tokens: 16000,
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
-      output_config: { effort: 'medium', format: { type: 'json_schema', schema: TX_SCHEMA } },
-      messages: [{ role: 'user', content: [...images, { type: 'text', text: String(req.prompt || '') }] }]
-    });
-    if (res.stop_reason === 'refusal') return { ok: false, code: 'refused' };
-    if (res.stop_reason === 'max_tokens') return { ok: false, code: 'too_long' };
-    const text = res.content.filter(b => b.type === 'text').map(b => b.text).join('');
-    try { return { ok: true, data: JSON.parse(text) }; } catch (err) { return { ok: false, code: 'invalid_json' }; }
+    pdfjs = pdfjs || await import('pdfjs-dist/legacy/build/pdf.mjs');
+    const task = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, useSystemFonts: true });
+    const doc = await task.promise;
+    const pages = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const items = (await (await doc.getPage(n)).getTextContent()).items.filter(i => i.str && i.str.trim());
+      const lines = [];
+      for (const i of items) {
+        const x = i.transform[4], y = i.transform[5];
+        let line = lines.find(l => Math.abs(l.y - y) < Math.max(2, (i.height || 8) * 0.4));
+        if (!line) lines.push(line = { y, parts: [] });
+        line.parts.push({ x, s: i.str });
+      }
+      lines.sort((a, b) => b.y - a.y);
+      pages.push(lines.map(l => l.parts.sort((a, b) => a.x - b.x).map(p => p.s.trim()).join('  ')).join('\n'));
+    }
+    await task.destroy();
+    return { ok: true, pages };
   } catch (err) {
-    return { ok: false, ...errCode(err) };
+    return { ok: false, code: err.name === 'PasswordException' ? 'pdf_locked' : 'pdf_error', message: String(err.message || err) };
   }
 });
 
