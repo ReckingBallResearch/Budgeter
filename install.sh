@@ -1,21 +1,20 @@
-
 #!/bin/bash
-# Budgeter installer: builds the app and puts it in /Applications.
+# Budgeter installer: builds the Mac app from this folder and puts it in /Applications.
 # Safe to run again; it updates the app and keeps your data.
 set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOME_DIR="$HOME/Budgeter"
 APP="/Applications/Budgeter.app"
 step(){ printf '\n\033[1;34m==> %s\033[0m\n' "$1"; }
 fail(){ printf '\n\033[1;31mError: %s\033[0m\n' "$1"; exit 1; }
 
-[ "$(uname)" = "Darwin" ] || fail "This installer is for macOS."
+[ "$(uname)" = "Darwin" ] || fail "This installer is for macOS. On other systems, open app/index.html in your browser instead."
+case "$(uname -m)" in arm64) ARCH=arm64 ;; x86_64) ARCH=x64 ;; *) fail "Unsupported Mac processor: $(uname -m)" ;; esac
 
-# 1. Node.js 18 or newer
+# 1. Node.js 22 or newer, only needed to build the app
 NODE_OK=0
 if command -v node >/dev/null 2>&1; then
-  [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 18 ] && NODE_OK=1
+  [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 22 ] && NODE_OK=1
 fi
 if [ $NODE_OK -eq 0 ]; then
   step "Installing Node.js (you'll be asked for your Mac password)"
@@ -29,25 +28,17 @@ if [ $NODE_OK -eq 0 ]; then
 fi
 echo "Node $(node -v)"
 
-# 2. Keep the project in ~/Budgeter so later updates are quick
-step "Copying project to $HOME_DIR"
-mkdir -p "$HOME_DIR/app"
-if [ "$SRC" != "$HOME_DIR" ]; then
-  cp "$SRC/package.json" "$SRC/main.js" "$SRC/install.sh" "$SRC/README.md" "$HOME_DIR/"
-  cp "$SRC/app/index.html" "$HOME_DIR/app/index.html"
-fi
-cd "$HOME_DIR"
-
-# 3. Build
+# 2. Build in this folder
+cd "$SRC"
 step "Installing build tools (first run takes a few minutes)"
 npm install --no-audit --no-fund --loglevel=error
-step "Building Budgeter"
+step "Building Budgeter for $ARCH"
 rm -rf dist
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64 --dir >/tmp/budgeter-build.log 2>&1 || { tail -20 /tmp/budgeter-build.log; fail "Build failed. Full log: /tmp/budgeter-build.log"; }
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --"$ARCH" --dir >/tmp/budgeter-build.log 2>&1 || { tail -20 /tmp/budgeter-build.log; fail "Build failed. Full log: /tmp/budgeter-build.log"; }
 BUILT=$(find dist -maxdepth 2 -name 'Budgeter.app' -type d | head -1)
 [ -n "$BUILT" ] || fail "Build finished but Budgeter.app wasn't found in dist."
 
-# 4. Install
+# 3. Install. The app isn't signed by a registered developer, so it's signed locally to open without warnings.
 step "Installing to /Applications"
 osascript -e 'tell application "Budgeter" to quit' >/dev/null 2>&1 || true
 sleep 1
@@ -58,4 +49,4 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
 step "Done. Opening Budgeter."
 open "$APP"
-echo "To update later: replace ~/Budgeter/app/index.html and run: bash ~/Budgeter/install.sh"
+echo "To update later: get the latest version of this folder (git pull) and run: bash install.sh"

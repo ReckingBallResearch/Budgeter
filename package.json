@@ -2,8 +2,13 @@
   "name": "budgeter",
   "productName": "Budgeter",
   "version": "2.0.0",
-  "description": "Monthly budget planner: income, bills, spending, accounts, debt, trends and goals, stored on this computer.",
+  "description": "Monthly budget planner for income, bills, spending, accounts, debt, trends and goals. Your data stays on your computer.",
   "author": "Sean Keehan",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ReckingBallResearch/Budgeter.git"
+  },
   "main": "main.js",
   "scripts": {
     "start": "electron .",

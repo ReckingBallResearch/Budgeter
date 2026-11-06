@@ -815,7 +815,7 @@ async function sampleCaps(){
   }catch(e){return null}
 }
 /* what to show when the Mac app's local AI isn't ready */
-const aiSetup=c=>c?.why==='off'?'Open the Ollama app on this Mac to use the local AI, then check again.'
+const aiSetup=c=>c?.why==='off'?`Optional: reading PDFs and screenshots, and asking about your spending, use a free AI that runs on this Mac. To turn it on, install <a href="https://ollama.com" target="_blank" rel="noopener">Ollama</a>, run <code>ollama pull ${LOCAL_MODEL}</code> in Terminal, and keep the Ollama app open. Everything else works without it. If you already have Ollama, open it and check again.`
   :`Ollama is running but doesn't have ${LOCAL_MODEL} yet. In Terminal, run <code>ollama pull ${LOCAL_MODEL}</code>, then check again.`;
 /* Claude sees each image at about 1.2 megapixels, so tall phone screenshots go as overlapping pieces to keep small text readable */
 async function shotPieces(files,lim){
