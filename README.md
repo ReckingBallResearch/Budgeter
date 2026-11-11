@@ -39,10 +39,18 @@ Reading PDF statements and screenshots, and the **Ask about your spending** pane
 
 A Mac with 16 GB of memory runs it comfortably; with 8 GB it's slower. A one-page statement takes about 20 seconds. Small models make mistakes, so you check every transaction before it's imported (with a **Flip them** link if money in and out come out backwards), and for spending questions the app does all the math while the AI only explains it. Scanned PDFs are pictures with no text in them; take screenshots of their pages instead.
 
+## Optional: purchases by voice with Ay-Zee (Mac app)
+If you run the RB Home voice assistant, you can say "Add a purchase: Kukje Grocery for 34.17 and Kukje Bakery for 13.78". The purchases wait on your RB Hub until Budgeter collects them over your home network (every minute while it's open). **Spending** shows how many are waiting; you check each one (speech can mishear names and amounts), pick a category and card, and add them. Unticked ones stay on the Hub for later; **×** discards one.
+
+1. Ask your Hub admin for the `budgeter_token` (in the Hub's `config.toml`, under `[admin]`).
+2. In Budgeter, open **Spending → Ay-Zee** and enter the Hub address (`http://192.168.30.11:8700`) and the token.
+
+The token opens only the purchase list on the Hub. The address and token stay on this Mac and aren't in backups.
+
 ## Your data
 - **Back up regularly:** **Download backup** at the bottom of the page saves everything to a file. **Restore from backup** loads it, including into the other version (browser ↔ Mac app).
 - The Mac app keeps its data in `~/Library/Application Support/Budgeter`.
-- Nothing is sent anywhere. The only network requests are for fonts (it falls back to system fonts offline) and, if you set it up, to Ollama on your own Mac.
+- Nothing is sent anywhere. The only network requests are for fonts (it falls back to system fonts offline) and, if you set them up, to Ollama on your own Mac and to your RB Hub on your home network (which only sends purchases to Budgeter).
 
 ## Other systems
 The installer is Mac-only. On Windows or Linux, use the browser version. If you're comfortable with Node.js, `npm install` and `npm start` should also run the desktop app there, but that isn't tested.
