@@ -148,8 +148,6 @@ body.dragging,body.dragging *{user-select:none;-webkit-user-select:none;cursor:g
 .empty{padding:22px;text-align:center;color:var(--muted);background:var(--surface);border:1px dashed var(--line);border-radius:8px}
 dialog{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);padding:20px;width:min(560px,calc(100vw - 24px));max-height:calc(100vh - 40px);overflow:auto}
 dialog::backdrop{background:rgba(10,15,20,.55)}
-dialog.wide{width:min(980px,calc(100vw - 24px))}
-.azm{min-width:170px}
 .fld{display:grid;gap:4px;margin:0 0 12px}
 .fld label{font-size:13px;color:var(--muted)}
 .fld small{color:var(--muted);font-size:12.5px}
@@ -1002,93 +1000,6 @@ function openImport(){
   d.showModal();
 }
 
-/* ---------- Ay-Zee: purchases said to the RB Home voice assistant (Mac app only) ----------
-   "Add a purchase: Kukje Grocery for 34.17" waits on the RB Hub until Budgeter collects it. main.js talks
-   to the Hub; the page shows what's waiting, you check it, and added (or discarded) purchases are cleared
-   from the Hub. Ids already added are kept here, so a purchase is never added twice if clearing fails. */
-const HUB=DESK?.hub||null,AZ={on:false,list:[],err:''};
-const azTaken=()=>lget('ayzee-taken')||[];
-const azErr=r=>({offline:'Can’t reach the RB Hub. Is this Mac on the home network?',token:'The RB Hub didn’t accept the token.',bad_url:'Use the Hub’s address, like http://192.168.30.11:8700.',no_token:'Add the budgeter token.'}[r?.code]||`The RB Hub had a problem${r?.message?': '+r.message:''}.`);
-async function azCheck(){
-  if(!HUB||!plan||S.locked)return;
-  const c=await HUB.get().catch(()=>({set:false}));AZ.on=c.set;
-  if(!AZ.on){AZ.list=[];AZ.err=''}
-  else{
-    const r=await HUB.pending().catch(()=>({ok:false}));
-    if(!r.ok)AZ.err=azErr(r);
-    else{
-      const taken=new Set(azTaken()),again=r.purchases.filter(p=>taken.has(p.id)).map(p=>p.id);
-      if(again.length)HUB.done(again);
-      AZ.list=r.purchases.filter(p=>!taken.has(p.id));AZ.err='';
-    }
-  }
-  azShow();
-}
-function azShow(){
-  const t=document.querySelector('.tab[data-tab="spend"]');if(t)t.textContent='Spending'+(AZ.list.length?` (${AZ.list.length})`:'');
-  const e=$('#az');if(e)e.innerHTML=azHtml();
-}
-const azHtml=()=>AZ.list.length?`<div class="alert">Ay-Zee has ${AZ.list.length===1?'a purchase':AZ.list.length+' purchases'} for you, ${f2(AZ.list.reduce((s,p)=>s+(+p.amount||0),0))}. <button class="lnk" data-act="ayzee">Check and add</button></div>`
-  :AZ.on&&AZ.err?`<p class="muted small">Ay-Zee: ${esc(AZ.err)} <button class="lnk" data-act="azset">Settings</button></p>`:'';
-function azSetup(){
-  HUB.get().then(c=>openForm('Ay-Zee purchases',[
-    {k:'url',l:'RB Hub address',req:o=>!o.off,ph:'http://192.168.30.11:8700',help:'Purchases you say to Ay-Zee (“Add a purchase: Kukje Grocery for 34.17”) wait on the RB Hub until Budgeter collects them. You check each one before it’s added.'},
-    {k:'token',l:'Budgeter token',t:'password',ph:c.set?'Leave blank to keep the saved one':'',help:'[admin] budgeter_token in the Hub’s config.toml. It opens nothing else on the Hub. The address and token stay on this Mac and aren’t in backups.'},
-    {k:'off',l:'Stop collecting purchases from Ay-Zee',t:'checkbox',show:()=>c.set}],
-    {url:c.url||'http://192.168.30.11:8700'},async o=>{
-      const r=await HUB.set(o.off?{url:''}:{url:o.url,token:o.token});
-      if(!r.ok){toast(azErr(r));return}
-      toast(o.off?'Ay-Zee purchases are off':'Connected to Ay-Zee');await azCheck();if(!o.off&&AZ.list.length)azReview();
-    }));
-}
-function azReview(){
-  if(!AZ.list.length){toast(AZ.err||'Nothing from Ay-Zee right now');return}
-  const d=$('#dlg'),cats=catList(),accts=acctOpts(),find=(l,s,f)=>{s=String(s||'').toLowerCase();return s?l.find(x=>f(x).toLowerCase()===s)||l.find(x=>f(x).toLowerCase().includes(s)||s.includes(f(x).toLowerCase())):null};
-  const seen=new Set();Object.values(tx).forEach(x=>x.items.forEach(t=>seen.add(`${t.date}|${t.desc.toLowerCase()}|${t.amt.toFixed(2)}`)));
-  const rows=AZ.list.map(p=>{
-    const desc=String(p.merchant||'').trim(),amt=r2(+p.amount||0),date=pd(p.date)||TODAY,mm=plan.merch?.[desc.toLowerCase()];
-    const cat=find(cats,p.category,c=>c)||mm?.cat||catFor(desc,-1),acct=find(accts.slice(1),p.account,a=>a[1])?.[0]||mm?.acct||'';
-    return{id:p.id,date,desc,amt,cat,acct,tag:mm?.tag||'',dup:seen.has(`${date}|${desc.toLowerCase()}|${(-amt).toFixed(2)}`),who:[p.person,p.room].filter(Boolean).join(' in ')};
-  });
-  const sel=(opts,v)=>opts.map(([o,l])=>`<option value="${esc(o)}"${o===v?' selected':''}>${esc(l)}</option>`).join('');
-  d.onkeydown=null;d.oninput=d.onchange=null;d.className='wide';d.addEventListener('close',()=>d.className='',{once:true});
-  d.innerHTML=`<h3>Purchases from Ay-Zee</h3><p class="muted small">Check each one: speech can mishear names and amounts. Unticked ones stay on the Hub for later.</p>
-  <div class="scroll"><table><thead><tr><th></th><th>Date</th><th>Merchant</th><th class="num">Amount</th><th>Category</th><th>Paid with</th><th></th></tr></thead><tbody>${rows.map((r,i)=>`<tr data-i="${i}">
-  <td><input type="checkbox" class="azk" aria-label="Add this one"${r.dup?'':' checked'}></td>
-  <td><input type="date" class="azd" value="${r.date}" aria-label="Date"></td>
-  <td><input class="azm" value="${esc(r.desc)}" aria-label="Merchant">${r.dup?'<div class="since">Already logged?</div>':''}${r.who?`<div class="since">Said by ${esc(r.who)}</div>`:''}</td>
-  <td><input type="number" class="aza mini" step="0.01" min="0" inputmode="decimal" value="${r.amt.toFixed(2)}" aria-label="Amount"></td>
-  <td><select class="azc" aria-label="Category" style="width:auto">${sel([...new Set([...cats,r.cat])].map(c=>[c,c]),r.cat)}</select></td>
-  <td><select class="azp" aria-label="Paid with" style="width:auto">${sel(accts,r.acct)}</select></td>
-  <td class="act"><button class="btn sm ghost danger" type="button" data-azdrop="${i}" aria-label="Discard">×</button></td></tr>`).join('')}</tbody></table></div>
-  <p class="err" id="ferr"></p><div class="acts"><button class="btn ghost" type="button" id="azs">Settings</button><button class="btn" type="button" data-close>Cancel</button><button class="btn pri" type="button" id="azgo">Add</button></div>`;
-  const on=()=>[...d.querySelectorAll('tbody tr')].filter(tr=>tr.querySelector('.azk').checked);
-  const count=()=>{const n=on().length;$('#azgo').textContent=n?`Add ${n}`:'Add';$('#azgo').disabled=!n};
-  d.onchange=count;count();
-  d.querySelector('[data-close]').onclick=()=>d.close();
-  $('#azs').onclick=()=>{d.close();azSetup()};
-  d.querySelectorAll('[data-azdrop]').forEach(b=>b.onclick=async()=>{
-    const tr=b.closest('tr'),r=rows[+tr.dataset.i],res=await HUB.done([r.id]);
-    if(!res.ok){$('#ferr').textContent=azErr(res);return}
-    AZ.list=AZ.list.filter(p=>p.id!==r.id);tr.remove();azShow();count();if(!AZ.list.length)d.close();
-  });
-  $('#azgo').onclick=async()=>{
-    const add=[];
-    for(const tr of on()){
-      const r=rows[+tr.dataset.i],date=tr.querySelector('.azd').value,desc=tr.querySelector('.azm').value.trim(),amt=r2(parseFloat(tr.querySelector('.aza').value));
-      if(!pd(date)||!desc||!(amt>0)){$('#ferr').textContent='Each ticked purchase needs a date, a merchant and an amount.';return}
-      add.push({id:r.id,t:{id:uid(),date,desc,amt:-amt,cat:tr.querySelector('.azc').value,acct:tr.querySelector('.azp').value,tag:r.tag}});
-    }
-    for(const a of add){await addTx(a.t);learn(a.t)}
-    const ids=add.map(a=>a.id);lset('ayzee-taken',[...azTaken(),...ids].slice(-300));
-    AZ.list=AZ.list.filter(p=>!ids.includes(p.id));HUB.done(ids);azShow();
-    const ms={};add.forEach(a=>{const m=a.t.date.slice(0,7);ms[m]=(ms[m]||0)+1});
-    const top=Object.keys(ms).sort((x,y)=>ms[y]-ms[x])[0];if(top)view={y:+top.slice(0,4),m:+top.slice(5,7)-1};
-    tab='spend';d.close();toast(`Added ${add.length} purchase${add.length===1?'':'s'} from Ay-Zee`);render();
-  };
-  d.showModal();
-}
-
 /* ---------- shared pieces ---------- */
 function cal(list,tips){
   const dueMarks=build(view.y,view.m).filter(e=>e.pay&&e.due!==e.date&&(!KICK()||e.due>=KICK()));
@@ -1308,8 +1219,7 @@ function txRows(){
 function vSpend(){
   const tags=tagList(),L=logged(mk(view)),byTag={};L.items.forEach(t=>{if(t.tag)byTag[t.tag]=(byTag[t.tag]||0)-t.amt});
   return`<div class="sec" style="margin-top:18px">${qaHtml()}</div>
-  <div class="row"><button class="btn" data-act="timport">Import statement</button>${HUB?'<button class="btn" data-act="ayzee">Ay-Zee</button>':''}<button class="btn" data-act="trules">Category rules</button><button class="btn ghost" data-act="tadd">Add with more detail</button></div>
-  <div id="az">${azHtml()}</div>
+  <div class="row"><button class="btn" data-act="timport">Import statement</button><button class="btn" data-act="trules">Category rules</button><button class="btn ghost" data-act="tadd">Add with more detail</button></div>
   ${Object.keys(byTag).length?`<p class="muted small">Tagged this month: ${Object.entries(byTag).map(([k,v])=>`${esc(k)} ${f2(v)}`).join(' · ')}</p>`:''}
   <div class="row"><input class="grow" id="q" placeholder="Search merchant" value="${esc(fq)}" aria-label="Search"><select id="fc" style="width:auto" aria-label="Category filter"><option value="">All categories</option>${catList().map(c=>`<option${c===fcat?' selected':''}>${esc(c)}</option>`).join('')}</select><select id="ft" style="width:auto" aria-label="Tag filter"><option value="">All tags</option>${tags.map(c=>`<option${c===ftag?' selected':''}>${esc(c)}</option>`).join('')}</select></div>
   <p id="txs" class="muted">${txSum()}</p>
@@ -1513,7 +1423,6 @@ document.addEventListener('click',e=>{
   else if(act==='tadd')editTx();else if(act==='tedit')editTx(id);
   else if(act==='tdel'){const m=mk(view);tx[m].items=tx[m].items.filter(t=>t.id!==id);saveTx(m);paint()}
   else if(act==='timport')openImport();else if(act==='trules')editRules();
-  else if(act==='ayzee'){if(AZ.on)azCheck().then(azReview);else azSetup()}else if(act==='azset')azSetup();
   else if(act==='catadd')openForm('Add category',[{k:'name',l:'Category name',req:1},{k:'budget',l:'Monthly budget',t:'number'}],{},o=>{if(!catList().includes(o.name)){plan.cats.push({name:o.name,budget:o.budget});savePlan()}render()});
   else if(act==='catdel'){const c=b.dataset.cat;ask(`Remove category “${c}”?`,'Remove',()=>{plan.cats=plan.cats.filter(x=>x.name!==c);savePlan();render()})}
 });
@@ -1606,8 +1515,6 @@ addEventListener('pagehide',flushAll);
   const ui=lget('ui');if(ui&&VIEWS[ui.tab]&&ui.tab!=='kickoff')tab=ui.tab;
   if(plan.kickoff&&!plan.kickDone&&plan.accounts.length)tab='kickoff';
   render();
-  /* Ay-Zee: look for purchases now, every minute, and when the window comes back */
-  if(HUB){azCheck();setInterval(()=>{if(!document.hidden)azCheck()},60000);addEventListener('focus',azCheck)}
 })();
 })();
 

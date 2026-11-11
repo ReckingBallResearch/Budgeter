@@ -1,6 +1,5 @@
 const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron');
 const path = require('path');
-const fs = require('fs');
 
 // One window only, so two copies never write the same data at once.
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -121,56 +120,6 @@ ipcMain.handle('pdf:text', async (e, bytes) => {
   } catch (err) {
     return { ok: false, code: err.name === 'PasswordException' ? 'pdf_locked' : 'pdf_error', message: String(err.message || err) };
   }
-});
-
-/* ---------- Ay-Zee: purchases said to the RB Home voice assistant ---------- */
-// The RB Hub on the home network keeps purchases said to Ay-Zee until Budgeter collects them.
-// Its address and token stay in this Mac's app data (ayzee.json), never in the plan or backups.
-const hubFile = () => path.join(app.getPath('userData'), 'ayzee.json');
-function hubConfig() { try { return JSON.parse(fs.readFileSync(hubFile(), 'utf8')) || {}; } catch (err) { return {}; } }
-const hubFail = err => ({ ok: false, code: err.code || 'hub_error', message: err.message || '' });
-
-async function hub(route, body, cfg = hubConfig()) {
-  if (!cfg.url || !cfg.token) throw { code: 'not_set' };
-  let res;
-  try {
-    res = await fetch(cfg.url + route, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + cfg.token, 'content-type': 'application/json' }, body: body && JSON.stringify(body), signal: AbortSignal.timeout(8000) });
-  } catch (err) {
-    throw { code: 'offline' };
-  }
-  if (res.status === 401) throw { code: 'token' };
-  if (!res.ok) throw { code: 'hub_error', message: `${res.status} ${(await res.text().catch(() => '')).slice(0, 200) || res.statusText}` };
-  return res.json();
-}
-
-ipcMain.handle('hub:get', e => {
-  if (!fromApp(e)) return { url: '', set: false };
-  const cfg = hubConfig();
-  return { url: cfg.url || '', set: !!(cfg.url && cfg.token) };
-});
-// An empty url turns it off. A new address and token are tried before they're saved.
-ipcMain.handle('hub:set', async (e, req) => {
-  if (!fromApp(e)) return { ok: false, code: 'hub_error' };
-  const url = String(req?.url || '').trim().replace(/\/+$/, ''), token = String(req?.token || '').trim();
-  if (!url) { try { fs.rmSync(hubFile(), { force: true }); } catch (err) {} return { ok: true }; }
-  if (!/^https?:\/\/[^\s/]+$/.test(url)) return { ok: false, code: 'bad_url' };
-  const cfg = { url, token: token || (hubConfig().url === url ? hubConfig().token : '') };
-  if (!cfg.token) return { ok: false, code: 'no_token' };
-  try {
-    await hub('/api/purchases', null, cfg);
-    fs.mkdirSync(path.dirname(hubFile()), { recursive: true });
-    fs.writeFileSync(hubFile(), JSON.stringify(cfg), { mode: 0o600 });
-    return { ok: true };
-  } catch (err) { return hubFail(err); }
-});
-ipcMain.handle('hub:pending', async e => {
-  if (!fromApp(e)) return { ok: false, code: 'hub_error' };
-  try { return { ok: true, purchases: (await hub('/api/purchases')).purchases || [] }; } catch (err) { return hubFail(err); }
-});
-// Purchases added to Budgeter (or discarded) are deleted from the Hub.
-ipcMain.handle('hub:done', async (e, ids) => {
-  if (!fromApp(e) || !Array.isArray(ids)) return { ok: false, code: 'hub_error' };
-  try { return { ok: true, done: (await hub('/api/purchases/done', { ids: ids.map(String) })).done }; } catch (err) { return hubFail(err); }
 });
 
 app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });

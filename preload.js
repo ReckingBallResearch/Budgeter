@@ -1,4 +1,4 @@
-// The page's only way to reach the main process: local AI through Ollama, PDF text, and Ay-Zee's purchases.
+// The page's only way to reach the main process: local AI through Ollama and PDF text.
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('budgeterDesktop', {
@@ -12,12 +12,5 @@ contextBridge.exposeInMainWorld('budgeterDesktop', {
     return { id, done: ipcRenderer.invoke('ai:ask', { ...req, id }).finally(() => ipcRenderer.removeListener('ai:chunk', h)) };
   },
   stop: id => ipcRenderer.invoke('ai:stop', id),
-  pdfText: bytes => ipcRenderer.invoke('pdf:text', bytes),
-  // purchases said to Ay-Zee, waiting on the RB Hub
-  hub: {
-    get: () => ipcRenderer.invoke('hub:get'),
-    set: cfg => ipcRenderer.invoke('hub:set', cfg),
-    pending: () => ipcRenderer.invoke('hub:pending'),
-    done: ids => ipcRenderer.invoke('hub:done', ids)
-  }
+  pdfText: bytes => ipcRenderer.invoke('pdf:text', bytes)
 });
