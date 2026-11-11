@@ -9,7 +9,7 @@ A monthly budget planner that keeps your data on your own computer. No account, 
 - **Debt payoff planner** (avalanche or snowball), **trends** by category, and **net worth** over time.
 - **Optional local AI** on the Mac app: read PDF statements and screenshots, and ask questions about your spending. It runs on your Mac through [Ollama](https://ollama.com), so nothing leaves your computer.
 
-## Two ways to use it
+## Three ways to use it
 
 ### 1. In your browser (any computer)
 Download this repo (**Code → Download ZIP**), unzip it, and open `app/index.html` in Chrome, Safari, Firefox or Edge. That's it.
@@ -27,6 +27,11 @@ It installs Node.js if you don't have it (you'll be asked for your Mac password)
 
 The app is built and signed on your own Mac, so macOS doesn't show the "unidentified developer" warning.
 
+### 3. On an RB Hub, for the whole household
+If you run RB Home, the Hub on your home network serves Budgeter at `http://<hub>:8700/budget`, with a separate budget for each person, each opened with that person's own sign-in link. Data is saved on the Hub (on the NAS, with its backups) and works from any computer or phone at home. Saying "Add a purchase: Kukje Grocery for 34.17 and Kukje Bakery for 13.78" to Ay-Zee adds them to the speaker's budget, marked **Ay-Zee**. Reading statements and asking about your spending use Ay-Zee's AI at home (screenshots only if its model reads pictures; for a PDF, paste its text).
+
+To move in, use **Download backup** in your current Budgeter, open your sign-in link, and **Restore from backup**.
+
 ## Optional: local AI (Mac app)
 Reading PDF statements and screenshots, and the **Ask about your spending** panel on the Trends tab, use a small AI model running on your Mac. Everything else works without it.
 
@@ -42,6 +47,7 @@ A Mac with 16 GB of memory runs it comfortably; with 8 GB it's slower. A one-pag
 ## Your data
 - **Back up regularly:** **Download backup** at the bottom of the page saves everything to a file. **Restore from backup** loads it, including into the other version (browser ↔ Mac app).
 - The Mac app keeps its data in `~/Library/Application Support/Budgeter`.
+- On an RB Hub, your budget is saved on the Hub, and only your sign-in link opens it.
 - Nothing is sent anywhere. The only network requests are for fonts (it falls back to system fonts offline) and, if you set it up, to Ollama on your own Mac.
 
 ## Other systems

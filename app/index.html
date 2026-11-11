@@ -253,13 +253,30 @@ const KICK=()=>plan.kickoff||'';
 const START=()=>KICK()>TODAY?KICK():TODAY;
 
 /* ---------- storage: a copy on this device and a copy in your account ---------- */
+/* Served by the RB Hub on the NAS (window.budgeterServer), "your account" is this person's budget on the Hub, signed in
+   with their token, and this device's copy is kept per person so people sharing a browser don't see each other's. */
+const SRV=window.budgeterServer||null,TOKEN=SRV?new URLSearchParams(location.search).get('token')||'':'';
+const LP=SRV?`budgeter@${SRV.person}:`:'budgeter:';
 const S={db:null,uid:null,locked:false};
-const lget=k=>{try{const v=localStorage.getItem('budgeter:'+k);return v?JSON.parse(v):null}catch(e){return null}};
-const lset=(k,o)=>{try{localStorage.setItem('budgeter:'+k,JSON.stringify(o));return true}catch(e){return false}};
+const lget=k=>{try{const v=localStorage.getItem(LP+k);return v?JSON.parse(v):null}catch(e){return null}};
+const lset=(k,o)=>{try{localStorage.setItem(LP+k,JSON.stringify(o));return true}catch(e){return false}};
+async function hubFetch(path,o={}){
+  const url=SRV.api+path+(path.includes('?')?'&':'?')+'person='+encodeURIComponent(SRV.person);
+  const r=await fetch(url,{...o,headers:{...(TOKEN?{authorization:'Bearer '+TOKEN}:{}),...(o.body?{'content-type':'application/json'}:{})}});
+  if(r.status===401||r.status===403)throw{code:'signin'};
+  return r;
+}
+/* the Hub keeps Budgeter's documents by name ("plan", "tx-YYYY-MM"), behind the same calls as claude.use('db') */
+const hubDb={
+  doc:p=>{const k=p.split('/').pop();return{
+    get:async()=>{const r=await hubFetch('/docs/'+k);if(!r.ok)throw new Error('load '+r.status);const d=await r.json();return{exists:d!==null,data:()=>d}},
+    set:async o=>{const r=await hubFetch('/docs/'+k,{method:'POST',body:JSON.stringify(o)});if(!r.ok)throw new Error('save '+r.status)}}},
+  collection:()=>({get:async()=>{const r=await hubFetch('/docs');if(!r.ok)throw new Error('list '+r.status);return{docs:(await r.json()).keys.map(id=>({id}))}}})
+};
 const cpath=k=>`data/users/${S.uid}/${k}`;
 const pend={},timers={},chain={};
 function status(t,c){const e=$('#st');e.textContent=t;e.className='st '+(c||'')}
-const okMsg=()=>S.db?'Saved to account and device':'Saved on this device';
+const okMsg=()=>S.db?(SRV?`Saved to ${SRV.person}’s budget on the Hub`:'Saved to account and device'):'Saved on this device';
 async function sRead(k){
   const l=lget(k);let c=null;
   if(S.db){const s=await S.db.doc(cpath(k)).get();c=s.exists?clone(s.data()):null}
@@ -269,7 +286,7 @@ async function sRead(k){
 function flushKey(k){
   clearTimeout(timers[k]);const o=pend[k];if(!o||!S.db)return;delete pend[k];
   chain[k]=(chain[k]||Promise.resolve()).then(()=>S.db.doc(cpath(k)).set(o)).then(()=>{if(!Object.keys(pend).length)status(okMsg())},()=>{
-    pend[k]=pend[k]||o;timers[k]=setTimeout(()=>flushKey(k),10000);status('Saved on this device, retrying account','bad');
+    pend[k]=pend[k]||o;timers[k]=setTimeout(()=>flushKey(k),10000);status(SRV?'Saved on this device, retrying the Hub':'Saved on this device, retrying account','bad');
   });
 }
 const flushAll=()=>Object.keys(pend).forEach(flushKey);
@@ -284,7 +301,7 @@ const savePlan=()=>persist('plan',()=>plan);
 const saveTx=m=>persist('tx-'+m,()=>tx[m]);
 async function allMonths(){
   const set=new Set(Object.keys(tx));
-  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith('budgeter:tx-'))set.add(k.slice(12))}}catch(e){}
+  try{for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith(LP+'tx-'))set.add(k.slice(LP.length+3))}}catch(e){}
   if(S.db){try{(await S.db.collection('data/users/'+S.uid).get()).docs.forEach(d=>{if(d.id.startsWith('tx-'))set.add(d.id.slice(3))})}catch(e){}}
   return[...set].filter(m=>/^\d{4}-\d{2}$/.test(m)).sort();
 }
@@ -295,6 +312,7 @@ async function saveFile(filename,data,type){
 }
 /* older saves: Monthly planner kept data under planner: on this device and scheduled loans on the account */
 function moveOldKeys(){
+  if(SRV)return;
   try{
     if(localStorage.getItem('budgeter:plan')||!localStorage.getItem('planner:plan'))return;
     const ks=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i);if(k.startsWith('planner:'))ks.push(k)}
@@ -698,7 +716,7 @@ function editTx(id){
   const m=mk(view),old=id?tx[m].items.find(t=>t.id===id):null;
   const v=old?{...old,kind:old.amt>0?'in':'out',amt:Math.abs(old.amt)}:{date:TODAY.slice(0,7)===m?TODAY:m+'-01',kind:'out',cat:'Uncategorized'};
   openForm(old?'Edit transaction':'Add transaction',txFields(),v,async o=>{
-    const t={id:old?.id||uid(),date:o.date,desc:o.desc,amt:o.kind==='in'?Math.abs(o.amt):-Math.abs(o.amt),cat:o.cat,acct:o.acct,tag:o.tag,at:old?.at};
+    const t={id:old?.id||uid(),date:o.date,desc:o.desc,amt:o.kind==='in'?Math.abs(o.amt):-Math.abs(o.amt),cat:o.cat,acct:o.acct,tag:o.tag,at:old?.at,az:old?.az};
     if(old){tx[m].items=tx[m].items.filter(x=>x.id!==old.id);saveTx(m)}
     await addTx(t);learn(t);render();
   });
@@ -777,7 +795,7 @@ function parseCSV(t){
    On claude.ai it's Claude (the sample capability). In the Mac app it's a small model running locally in Ollama:
    nothing leaves the computer. sampleCaps() hides the difference: s.json() reads transactions, chat() answers questions */
 const DESK=window.budgeterDesktop||null;
-const AI_NAME=DESK?'The local AI':'Claude';
+const AI_NAME=DESK?'The local AI':SRV?'Ay-Zee’s AI':'Claude';
 const LOCAL_MODEL='gemma3:4b';
 const API_TYPES=['image/jpeg','image/png','image/webp','image/gif'];
 async function forApi(b){
@@ -793,14 +811,42 @@ async function forApi(b){
 }
 const TX_SCHEMA={type:'object',properties:{transactions:{type:'array',items:{type:'object',properties:{date:{type:'string'},description:{type:'string'},amount:{type:'number'},money:{type:'string',enum:['out','in']}},required:['date','description','amount','money']}}},required:['transactions']};
 /* a small model reads one image at a time best, so each picture is its own call */
-const deskSample={json:async(prompt,o={})=>{
+const perImage=call=>({json:async(prompt,o={})=>{
   const imgs=o.images?[...o.images]:[],all=[];
-  const one=async images=>{const r=await DESK.json({model:LOCAL_MODEL,prompt,images,schema:TX_SCHEMA});if(!r.ok)throw{code:r.code,message:r.message||''};all.push(...(r.data?.transactions||[]))};
+  const one=async images=>{const r=await call({prompt,images,schema:TX_SCHEMA});if(!r.ok)throw{code:r.code,message:r.message||''};all.push(...(r.data?.transactions||[]))};
   if(!imgs.length)await one([]);
   for(let i=0;i<imgs.length;i++){o.onPart?.(i+1,imgs.length);await one([(await forApi(imgs[i])).data])}
   return{transactions:all};
-}};
+}});
+const deskSample=perImage(req=>DESK.json({model:LOCAL_MODEL,...req}));
+/* on the RB Hub: Ay-Zee's model on the AI engine at home, through the Hub */
+const hubSample=perImage(async req=>{
+  try{const r=await hubFetch('/ai/json',{method:'POST',body:JSON.stringify(req)});return r.ok?await r.json():{ok:false,code:'ai_error',message:'the Hub answered '+r.status}}
+  catch(e){return{ok:false,code:e.code||'offline'}}
+});
+function hubChat(messages,onText){
+  const ctl=new AbortController();
+  const done=(async()=>{
+    let text='',r;
+    try{r=await hubFetch('/ai/chat',{method:'POST',body:JSON.stringify({messages}),signal:ctl.signal})}catch(e){throw{code:ctl.signal.aborted?'cancelled':e.code||'offline'}}
+    if(!r.ok)throw{code:'ai_error',message:'the Hub answered '+r.status};
+    const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+    try{
+      for(;;){
+        const {value,done}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});let nl;
+        while((nl=buf.indexOf('\n'))>=0){const m=JSON.parse(buf.slice(0,nl));buf=buf.slice(nl+1);if(m.ok===false)throw{code:m.code,message:m.message,text:m.text};text=m.text;onText(text)}
+      }
+    }catch(e){if(ctl.signal.aborted)throw{code:'cancelled',text};throw e?.code?e:{code:'ai_error',text}}
+    return text;
+  })();
+  return{stop:()=>ctl.abort(),done};
+}
 async function sampleCaps(){
+  if(SRV){
+    let st=null;try{st=await (await hubFetch('/ai')).json()}catch(e){}
+    if(!st?.ok)return{hub:true,s:null,img:null};
+    return{hub:true,model:st.model,s:hubSample,img:st.vision?{maxCount:10,maxInputBytes:50e6,mediaTypes:API_TYPES}:null,chunk:6000,chat:hubChat};
+  }
   if(DESK){
     const st=await DESK.status().catch(()=>({running:false,models:[]}));
     if(!st.running||!st.models.includes(LOCAL_MODEL))return{desktop:true,s:null,img:null,why:st.running?'model':'off'};
@@ -837,9 +883,10 @@ async function shotPieces(files,lim){
 function claudeErr(e,what){
   const c=e&&e.code;
   if(c==='not_granted'||c==='sampling_disabled')return'Claude isn’t allowed for this page. You can still import a CSV.';
-  if(c==='offline')return'Ollama isn’t running. Open the Ollama app, then try again.';
-  if(c==='no_model')return`Ollama doesn’t have ${LOCAL_MODEL}. In Terminal, run: ollama pull ${LOCAL_MODEL}`;
-  if(c==='timeout')return'The local AI took too long. Try a shorter statement or fewer screenshots.';
+  if(c==='signin')return'The Hub didn’t accept your sign-in. Open Budgeter from your bookmark again.';
+  if(c==='offline')return SRV?'Ay-Zee’s AI isn’t answering. Try again in a minute.':'Ollama isn’t running. Open the Ollama app, then try again.';
+  if(c==='no_model')return SRV?'Ay-Zee’s model isn’t on the AI engine. Check the model menu in Hub Admin.':`Ollama doesn’t have ${LOCAL_MODEL}. In Terminal, run: ollama pull ${LOCAL_MODEL}`;
+  if(c==='timeout')return`${AI_NAME} took too long. Try a shorter statement or fewer screenshots.`;
   if(c==='pdf_scan')return'That PDF has no text in it, so it’s probably a scan. Take screenshots of its pages and import those instead.';
   if(c==='pdf_locked')return'That PDF is password-protected. Save an unlocked copy and try again.';
   if(c==='pdf_error')return'Couldn’t open that PDF.';
@@ -877,13 +924,19 @@ function openImport(){
   <div class="acts"><button class="btn" type="button" data-close>Cancel</button><button class="btn pri" type="button" id="igo" disabled>Import</button></div>`;
   d.querySelector('[data-close]').onclick=()=>d.close();
   const err=t=>$('#ferr').textContent=t||'';
-  const readLabel=()=>caps?.local?'Read with local AI':'Read with Claude';
+  const readLabel=()=>caps?.local?'Read with local AI':caps?.hub?'Read with Ay-Zee’s AI':'Read with Claude';
   function showCaps(c){
     caps=c;if(!$('#ishot'))return;
-    $('#ipl').hidden=!c?.s;$('#ipl').textContent=readLabel();$('#iplnote').hidden=!c?.s||c.local;
+    $('#ipl').hidden=!c?.s;$('#ipl').textContent=readLabel();$('#iplnote').hidden=!c?.s||c.local||c.hub;
     $('#ishot').hidden=!c?.img;$('#ipdf').hidden=!c?.pdf;
-    d.querySelectorAll('.ainame').forEach(x=>x.textContent=c?.local?'The local AI':'Claude');
-    const k=$('#iai');k.hidden=!c?.desktop;if(!c?.desktop)return;
+    d.querySelectorAll('.ainame').forEach(x=>x.textContent=c?.local?'The local AI':c?.hub?'Ay-Zee’s AI':'Claude');
+    const k=$('#iai');k.hidden=!c?.desktop&&!c?.hub;if(k.hidden)return;
+    if(c.hub){
+      k.innerHTML=c.s?`<small class="muted">${c.img?'Screenshots and pasted text are':'Pasted text is'} read by ${esc(c.model)} on the AI engine at home; nothing leaves your network. For a PDF, copy its text and paste it.</small>`
+        :`<small class="muted">Ay-Zee’s AI isn’t answering right now. CSV import still works.</small> <button class="btn sm" type="button" id="aichk">Check again</button>`;
+      if(!c.s)$('#aichk').onclick=async()=>showCaps(await sampleCaps());
+      return;
+    }
     k.innerHTML=c.s?`<small class="muted">PDFs, screenshots and pasted text are read on this Mac by ${LOCAL_MODEL} in Ollama. Nothing leaves your computer.</small>`
       :`<small class="muted">${aiSetup(c)}</small> <button class="btn sm" type="button" id="aichk">Check again</button>`;
     if(!c.s)$('#aichk').onclick=async()=>showCaps(await sampleCaps());
@@ -978,7 +1031,7 @@ function openImport(){
   };
   $('#ii').onchange=async e=>{
     const files=[...e.target.files];if(!files.length||!caps?.img)return;
-    const lim=caps.img,what=files.length===1?'that screenshot':'those screenshots',who=caps.local?'the local AI':'Claude';
+    const lim=caps.img,what=files.length===1?'that screenshot':'those screenshots',who=caps.local?'the local AI':caps.hub?'Ay-Zee’s AI':'Claude';
     if(files.length>lim.maxCount){err(`Pick up to ${lim.maxCount} screenshots at a time.`);e.target.value='';return}
     err();$('#ii').disabled=true;busy(`Reading ${files.length===1?'your screenshot':files.length+' screenshots'} with ${who}. This can take up to a minute…`);
     try{
@@ -998,6 +1051,42 @@ function openImport(){
     tab='spend';d.close();toast(`Imported ${fresh.length} transactions`);render();
   };
   d.showModal();
+}
+
+/* ---------- Ay-Zee: purchases said to the home voice assistant (on the RB Hub only) ----------
+   "Add a purchase: Kukje Grocery for 34.17" waits on the Hub for the person who said it. This adds each one to their
+   budget the way Quick add would (merchant memory, then category rules), marked Ay-Zee, and clears it on the Hub once
+   its month is saved there. One already in its month (same az id) is only cleared, so none is added twice. */
+const pickBy=(list,said,name)=>{const s=String(said||'').trim().toLowerCase();if(!s)return null;return list.find(x=>name(x).toLowerCase()===s)||list.find(x=>{const n=name(x).toLowerCase();return n&&(n.includes(s)||s.includes(n))})||null};
+let azBusy=false;
+async function azMerge(){
+  if(!SRV||!plan||S.locked||azBusy)return;
+  azBusy=true;
+  try{
+    let list;try{const r=await hubFetch('/purchases');if(!r.ok)return;list=(await r.json()).purchases||[]}catch(e){return}
+    const added=[],months={},clear=[];
+    for(const p of list){
+      const desc=String(p.merchant||'').trim(),amt=r2(+p.amount||0),date=pd(p.date)||TODAY,m=date.slice(0,7);
+      if(!desc||!(amt>0)){clear.push(p.id);continue}
+      await ensureTx(m);if(S.locked)return;
+      (months[m]=months[m]||[]).push(p.id);
+      if(tx[m].items.some(t=>t.az===p.id))continue;
+      const mm=plan.merch?.[desc.toLowerCase()];
+      const t={id:uid(),at:Date.now(),date,desc,amt:-amt,cat:pickBy(catList(),p.category,c=>c)||mm?.cat||catFor(desc,-1),
+        acct:pickBy(plan.accounts,p.account,a=>a.name)?.id||mm?.acct||'',tag:mm?.tag||'',az:p.id};
+      tx[m].items.push(t);added.push(t);
+    }
+    for(const m of Object.keys(months)){
+      const k='tx-'+m;
+      if(added.some(t=>t.date.startsWith(m))){saveTx(m);flushKey(k);await chain[k]}
+      if(!pend[k])clear.push(...months[m]);  // the month is saved on the Hub
+    }
+    if(clear.length)hubFetch('/purchases/done',{method:'POST',body:JSON.stringify({ids:clear})}).catch(()=>{});
+    if(added.length){
+      toast(added.length===1?`Ay-Zee added ${added[0].desc}, ${f2(-added[0].amt)}`:`Ay-Zee added ${added.length} purchases`);
+      if(!document.activeElement?.closest?.('#main input,#main select,#main textarea'))render();  // don't wipe a half-typed entry
+    }
+  }finally{azBusy=false}
 }
 
 /* ---------- shared pieces ---------- */
@@ -1214,7 +1303,7 @@ function txSum(){
 function txRows(){
   const l=txFiltered(),cl=catList();
   if(!l.length)return`<tr><td colspan="6" class="muted">Nothing logged${fq||fcat||ftag?' matches these filters':' this month yet'}.</td></tr>`;
-  return l.map(t=>{const cats=cl.includes(t.cat)?cl:[...cl,t.cat];return`<tr><td>${dl(t.date)}</td><td>${esc(t.desc)}${t.tag?`<span class="pill tag">${esc(t.tag)}</span>`:''}</td><td><select data-act="tcat" data-id="${t.id}" aria-label="Category" style="width:auto">${cats.map(c=>`<option${c===t.cat?' selected':''}>${esc(c)}</option>`).join('')}</select></td><td>${esc(acctName(t.acct))}</td><td class="num ${t.amt>0?'pos':''}">${f2(t.amt)}</td><td class="act"><button class="btn sm" data-act="tedit" data-id="${t.id}">Edit</button> <button class="btn sm ghost danger" data-act="tdel" data-id="${t.id}" aria-label="Delete">×</button></td></tr>`}).join('');
+  return l.map(t=>{const cats=cl.includes(t.cat)?cl:[...cl,t.cat];return`<tr><td>${dl(t.date)}</td><td>${esc(t.desc)}${t.az?'<span class="pill" title="Said to Ay-Zee">Ay-Zee</span>':''}${t.tag?`<span class="pill tag">${esc(t.tag)}</span>`:''}</td><td><select data-act="tcat" data-id="${t.id}" aria-label="Category" style="width:auto">${cats.map(c=>`<option${c===t.cat?' selected':''}>${esc(c)}</option>`).join('')}</select></td><td>${esc(acctName(t.acct))}</td><td class="num ${t.amt>0?'pos':''}">${f2(t.amt)}</td><td class="act"><button class="btn sm" data-act="tedit" data-id="${t.id}">Edit</button> <button class="btn sm ghost danger" data-act="tdel" data-id="${t.id}" aria-label="Delete">×</button></td></tr>`}).join('');
 }
 function vSpend(){
   const tags=tagList(),L=logged(mk(view)),byTag={};L.items.forEach(t=>{if(t.tag)byTag[t.tag]=(byTag[t.tag]||0)-t.amt});
@@ -1330,8 +1419,8 @@ function drawAsk(){
 async function wireAsk(){
   const box=$('#askbody');if(!box)return;
   const c=await sampleCaps();if(!$('#askbody'))return;
-  if(!c?.chat){if(c?.desktop)box.innerHTML=`<p class="muted small">${aiSetup(c)}</p><button class="btn sm" data-act="askchk">Check again</button>`;else $('#ask').hidden=true;return}
-  box.innerHTML=`<p class="muted small">${c.local?`Answered on this Mac by ${LOCAL_MODEL}. Nothing leaves your computer.`:'Answered by Claude.'} The app works out the totals for ${MONL[view.m]} and the 5 months before it, and the AI explains them, so double-check anything important.</p>
+  if(!c?.chat){if(c?.desktop||c?.hub)box.innerHTML=`<p class="muted small">${c.hub?'Ay-Zee’s AI isn’t answering right now.':aiSetup(c)}</p><button class="btn sm" data-act="askchk">Check again</button>`;else $('#ask').hidden=true;return}
+  box.innerHTML=`<p class="muted small">${c.local?`Answered on this Mac by ${LOCAL_MODEL}. Nothing leaves your computer.`:c.hub?`Answered by ${esc(c.model)} on the AI engine at home. Nothing leaves your network.`:'Answered by Claude.'} The app works out the totals for ${MONL[view.m]} and the 5 months before it, and the AI explains them, so double-check anything important.</p>
   <div class="chatlog" id="asklog"></div>
   <div class="row" style="margin-top:10px">${ASK_SUGGEST.map(q=>`<button class="btn sm" type="button" data-askq="${esc(q)}">${esc(q)}</button>`).join('')}</div>
   <form class="row" id="askf" autocomplete="off"><input class="grow" id="askq" placeholder="Ask anything about your spending" aria-label="Your question"><button class="btn pri" type="submit" id="askgo">Ask</button><button class="btn" type="button" id="askstop" hidden>Stop</button><button class="btn ghost" type="button" id="askclr">Clear</button></form>`;
@@ -1340,7 +1429,7 @@ async function wireAsk(){
     askLog.push({role:'user',content:q});const a={role:'assistant',content:''};askLog.push(a);
     const msgs=[{role:'system',content:ASK_RULES+spendingFacts()},...askLog.slice(-9,-1).map(({role,content})=>({role,content}))];
     askRun=c.chat(msgs,t=>{a.content=t;drawAsk()});drawAsk();
-    askRun.done.then(t=>{a.content=t},e=>{a.content=e?.text||'';a.note=e?.code==='cancelled'?'Stopped.':['offline','no_model','timeout','rate_limited','not_granted','sampling_disabled'].includes(e?.code)?claudeErr(e,'that'):`${AI_NAME} couldn’t answer that. Try again.`})
+    askRun.done.then(t=>{a.content=t},e=>{a.content=e?.text||'';a.note=e?.code==='cancelled'?'Stopped.':['offline','no_model','timeout','rate_limited','not_granted','sampling_disabled','signin'].includes(e?.code)?claudeErr(e,'that'):`${AI_NAME} couldn’t answer that. Try again.`})
       .finally(()=>{askRun=null;if(!a.content&&!a.note)a.note='No answer came back. Try again.';drawAsk()});
   };
   $('#askf').onsubmit=e=>{e.preventDefault();const q=$('#askq').value;$('#askq').value='';ask(q)};
@@ -1499,13 +1588,14 @@ addEventListener('visibilitychange',()=>{if(document.hidden)flushAll()});
 addEventListener('pagehide',flushAll);
 (async()=>{
   try{
-    if(window.claude&&claude.use){
+    if(SRV){S.db=hubDb;S.uid=SRV.person}
+    else if(window.claude&&claude.use){
       const [db,user]=await Promise.all([claude.use('db'),claude.use('user')]);
       const id=user&&await user.id();
       if(db&&id){S.db=db;S.uid=id}
     }
   }catch(e){}
-  if(S.db)$('#savenote').textContent='Changes save automatically to your account and to this device.';
+  if(S.db)$('#savenote').textContent=SRV?`${SRV.person}’s budget. Changes save automatically to the RB Hub and to this device.`:'Changes save automatically to your account and to this device.';
   moveOldKeys();
   try{plan=Object.assign(blank(),await sRead('plan')||{})}
   catch(e){S.locked=true;plan=blank();status('Load failed: reload before editing','bad')}
@@ -1515,6 +1605,8 @@ addEventListener('pagehide',flushAll);
   const ui=lget('ui');if(ui&&VIEWS[ui.tab]&&ui.tab!=='kickoff')tab=ui.tab;
   if(plan.kickoff&&!plan.kickDone&&plan.accounts.length)tab='kickoff';
   render();
+  /* Ay-Zee's purchases: now, every minute, and when the window comes back */
+  if(SRV){azMerge();setInterval(()=>{if(!document.hidden)azMerge()},60000);addEventListener('focus',azMerge)}
 })();
 })();
 
