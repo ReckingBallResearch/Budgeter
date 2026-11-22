@@ -14,6 +14,9 @@ This folder is the source of truth. Edit `app/index.html` here, then ship it to 
 - Don't trust a small model with signs or arithmetic: the AI copies amounts as printed and the app sets the sign (`fromClaude`); for questions the app computes every total in `spendingFacts()` and the AI only explains them.
 - Statement imports read the account box first (`stmtAcct`). With statement text, `stmtInfo` keeps a value only where it's printed next to its label and reads the last 4 digits itself; `findAcct` matches by last 4, then file name, then name words (issuer nicknames like BofA and Amex count). Account changes are checkboxes the user sees before import, and older statements default off. The preview lists every row found; rows that match a saved transaction (same date, description and amount), summary lines (`SUMMARY_ROW`) and overlapping-screenshot repeats start unticked. Duplicates are checked only against saved transactions, so deleting one makes it importable again.
 
+- Categories: `PERM` ones (Transport) are always on the list and can't be removed; `upgrade(p)` re-adds them. Merchant memory never lets "Uncategorized" override a rule, and `catFor` falls back to the built-in `TRANSPORT` words after the user's rules. `recatOnce()` runs once per `plan.catv` and files old uncategorized purchases. Saving rules adds any category they name that doesn't exist yet.
+- Your charts (`plan.charts`, Trends tab): each one counts a purchase that matches any of its merchant words, tags or categories, excluding Transfer and Income. The app computes every number, and `spendingFacts()` passes the charts to Ask.
+
 ## Run
 - Browser preview: the `budgeter` config in `.claude/launch.json` serves `app/` on port 8765 (localStorage-only mode, same as desktop).
 - Desktop dev: `npm start`. Install or update the Mac app: `bash install.sh` (builds with electron-builder and copies to /Applications).

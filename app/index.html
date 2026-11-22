@@ -134,7 +134,20 @@ body.dragging,body.dragging *{user-select:none;-webkit-user-select:none;cursor:g
 .viz text{font:12px var(--body);fill:var(--muted)}
 .viz .gl{stroke:var(--line);stroke-width:1}
 .viz .base{stroke:var(--muted);stroke-width:1}
+.chart{margin:22px 0 0;padding-top:16px;border-top:1px solid var(--line)}
+.chh{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;justify-content:space-between;margin-bottom:4px}
+.chh h2{margin:0}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface);color:var(--muted);font:600 13px var(--body);padding:4px 11px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--soft);color:var(--accent)}
+.cards.sm{margin-top:8px;grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+.cards.sm .card b{font-size:18px}
+.chart details{margin-top:10px}
+.chart summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:14px}
+.chart details .scroll{margin-top:8px;max-height:320px;overflow:auto}
 .lg{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:13px;color:var(--muted);margin:0 0 8px}
+.lg i.dash{width:16px;height:0;border-radius:0;border-top:2px dashed var(--muted);vertical-align:3px}
 .lg i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;vertical-align:-1px}
 .chatlog{display:grid;gap:8px;margin:12px 0 0}
 .msg{padding:10px 12px;border-radius:10px;max-width:72ch;line-height:1.5;min-width:0;overflow-wrap:anywhere}
@@ -222,10 +235,14 @@ const dl=iso=>iso?`${MON[+iso.slice(5,7)-1]} ${+iso.slice(8,10)}`:'';
 const mi=iso=>(+iso.slice(0,4))*12+(+iso.slice(5,7))-1;
 const FREQS=[['monthly','Monthly'],['semi','Twice a month'],['biweekly','Every 2 weeks'],['weekly','Weekly'],['quarterly','Every 3 months'],['semiannual','Every 6 months'],['yearly','Yearly'],['once','One time']];
 const TYPES=[['checking','Checking'],['savings','Savings'],['cash','Cash'],['investment','Investment'],['retirement','Retirement (401k, IRA)'],['hsa','HSA (health savings account)'],['property','Vehicle or property'],['credit','Credit card'],['loan','Loan']];
-const DEFAULT_CATS=['Housing','Utilities','Groceries','Take Out','Dining & Bars','Transport','Insurance','Subscriptions','Health','Shopping','Entertainment','Travel','Savings','Other'];
+const DEFAULT_CATS=['Housing','Utilities','Groceries','Take Out','Dining & Bars','Transport','Insurance','Subscriptions','Health','Shopping','Entertainment','Travel','Entrepreneurial','Savings','Other'];
+/* always on the category list, so rules and imports that file things there can always be picked by hand too */
+const PERM=['Transport'];
+/* built-in fallback for getting around, after your own rules */
+const TRANSPORT=/\b(uber\b(?![\s*]*eats)|lyft|waymo|taxi|clipper|bart|caltrain|amtrak|muni|transit|park(?:ing?|mobile)|paybyphone|spothero|meters?)\b/i;
 const RESERVED=['Bill payment','Transfer','Income','Uncategorized'];
 const NOSPEND=['Bill payment','Transfer','Income'];
-const blank=()=>({v:2,income:[],bills:[],accounts:[],goals:[],cats:DEFAULT_CATS.map(name=>({name,budget:0})),rules:'',done:{},actual:{},applied:{},showPlanned:false,interestIn:false,kickoff:'',kickDone:false,nw:{},merch:{},extra:0,strategy:'avalanche'});
+const blank=()=>({v:2,income:[],bills:[],accounts:[],goals:[],cats:DEFAULT_CATS.map(name=>({name,budget:0})),rules:'',done:{},actual:{},applied:{},showPlanned:false,interestIn:false,kickoff:'',kickDone:false,nw:{},merch:{},extra:0,strategy:'avalanche',charts:[],chartSpan:12});
 
 let plan=null,tx={},view={y:now.getFullYear(),m:now.getMonth()},tab='overview',fq='',fcat='',ftag='';
 const mk=v=>`${v.y}-${pad(v.m+1)}`;
@@ -309,6 +326,11 @@ function moveOldKeys(){
 }
 function upgrade(p){
   let ch=false;
+  const has=n=>p.cats.some(c=>c.name.toLowerCase()===n.toLowerCase());
+  PERM.forEach(n=>{if(!has(n)){p.cats.push({name:n,budget:0});ch=true}});
+  /* v1 of the category list: adds Entrepreneurial once (it can be removed later); recatOnce() files old uncategorized purchases */
+  if(!(p.catv>=1)&&!has('Entrepreneurial')){p.cats.push({name:'Entrepreneurial',budget:0});ch=true}
+  if(!Array.isArray(p.charts)){p.charts=[];ch=true}
   p.accounts.forEach(a=>{
     if(a.type==='credit'&&!+a.dueDay){const d=+a.due||(a.duedate?+a.duedate.slice(8,10):0);if(d){a.dueDay=d;ch=true}}
     if(a.type==='loan'&&a.pdate){
@@ -337,10 +359,22 @@ function restore(file){
     ask(`Restore your plan and ${ms.length} months of spending from this backup${b.exported?' ('+b.exported.slice(0,10)+')':''}?`,'Restore',()=>{
       plan=Object.assign(blank(),b.plan);plan.payOn=plan.payOn||{};upgrade(plan);savePlan();
       ms.forEach(m=>{tx[m]={items:b.tx[m].items};saveTx(m)});
-      render();toast('Backup restored');
+      allLoaded=false;render();toast('Backup restored');recatOnce().then(()=>render());
     });
   };
   r.readAsText(file);
+}
+/* once per category-list version: file old uncategorized purchases that your rules (or the built-in transport words) now place */
+async function recatOnce(){
+  if(plan.catv>=1||S.locked)return;
+  let n=0;const by={};
+  for(const m of await allMonths()){
+    await ensureTx(m);let ch=false;
+    tx[m].items.forEach(t=>{if(t.cat!=='Uncategorized'||!(t.amt<0))return;const c=catFor(t.desc,t.amt);if(c!=='Uncategorized'){t.cat=c;by[c]=(by[c]||0)+1;n++;ch=true}});
+    if(ch)saveTx(m);
+  }
+  plan.catv=1;savePlan();
+  if(n)toast(`Filed ${n} uncategorized purchase${n>1?'s':''}: ${Object.entries(by).map(([c,k])=>`${k} in ${c}`).join(', ')}`);
 }
 async function ensureTx(m){
   if(tx[m])return;
@@ -535,12 +569,13 @@ function payoff(a){
 }
 const loanStart=a=>{const b=plan.bills.find(b=>b.to===a.id);return b?mi(b.date):now.getFullYear()*12+now.getMonth()+1};
 function catFor(desc,amt){
-  const d=String(desc).toLowerCase(),mm=plan.merch?.[d];if(mm)return mm.cat;
+  const d=String(desc).toLowerCase(),mm=plan.merch?.[d];if(mm&&mm.cat&&mm.cat!=='Uncategorized')return mm.cat;
   for(const l of (plan.rules||'').split('\n')){
     const i=l.lastIndexOf('=');if(i<1)continue;
     const k=l.slice(0,i).trim().toLowerCase(),c=l.slice(i+1).trim();
     if(k&&c&&d.includes(k))return c;
   }
+  if(amt<0&&TRANSPORT.test(d))return'Transport';
   return amt>0?'Income':'Uncategorized';
 }
 const catList=()=>[...new Set([...plan.cats.map(c=>c.name),...RESERVED])];
@@ -701,7 +736,7 @@ const txFields=()=>[
   {k:'acct',l:'Account',t:'select',opts:acctOpts()},
   {k:'tag',l:'Tag (optional)',list:tagList(),help:'A label that cuts across categories, like alcohol or work.'}];
 async function addTx(t){if(!t.at)t.at=Date.now();const nm=t.date.slice(0,7);await ensureTx(nm);tx[nm].items.push(t);saveTx(nm)}
-function learn(t){if(t.amt<0&&t.cat&&!NOSPEND.includes(t.cat)){(plan.merch=plan.merch||{})[t.desc.toLowerCase()]={desc:t.desc,cat:t.cat,tag:t.tag||'',acct:t.acct||''};savePlan()}}
+function learn(t){if(t.amt<0&&t.cat&&!NOSPEND.includes(t.cat)){const k=t.desc.toLowerCase(),o=plan.merch?.[k];(plan.merch=plan.merch||{})[k]={desc:t.desc,cat:t.cat==='Uncategorized'&&o?.cat?o.cat:t.cat,tag:t.tag||'',acct:t.acct||''};savePlan()}}
 function editTx(id){
   const m=mk(view),old=id?tx[m].items.find(t=>t.id===id):null;
   const v=old?{...old,kind:old.amt>0?'in':'out',amt:Math.abs(old.amt)}:{date:TODAY.slice(0,7)===m?TODAY:m+'-01',kind:'out',cat:'Uncategorized'};
@@ -716,7 +751,11 @@ function editRules(){
     {k:'rules',l:'Rules',t:'textarea',help:'One per line: keyword = Category. Matching ignores case and the first match wins. Merchants you have logged before use their last category first. Use “Bill payment” for bills already tracked on the Bills tab, so they are not counted twice.'},
     {k:'reapply',l:'Also re-categorize uncategorized transactions in this month',t:'checkbox'}],
     {rules:plan.rules,reapply:true},o=>{
-      plan.rules=o.rules;savePlan();
+      plan.rules=o.rules;
+      /* a rule that files things under a category you don't have yet adds that category, so it can be picked by hand too */
+      const add=[...new Set(o.rules.split('\n').filter(l=>l.lastIndexOf('=')>0).map(l=>l.slice(l.lastIndexOf('=')+1).trim()).filter(Boolean))].filter(c=>!catList().some(x=>x.toLowerCase()===c.toLowerCase()));
+      add.forEach(name=>plan.cats.push({name,budget:0}));if(add.length)toast(`Added ${add.length===1?'the category':'categories'} ${add.join(', ')}`);
+      savePlan();
       if(o.reapply){const m=mk(view);tx[m].items.forEach(t=>{if(t.cat==='Uncategorized'||(t.cat==='Income'&&t.amt>0))t.cat=catFor(t.desc,t.amt)});saveTx(m)}
       render();
     });
@@ -745,7 +784,7 @@ function wireQA(){
   const f=$('#qa');if(!f)return;
   $('#qa-desc').addEventListener('change',()=>{
     const v=$('#qa-desc').value.trim(),mm=plan.merch?.[v.toLowerCase()];
-    if(mm){$('#qa-cat').value=mm.cat;$('#qa-tag').value=mm.tag||'';if(mm.acct)$('#qa-acct').value=mm.acct}
+    if(mm&&mm.cat!=='Uncategorized'){$('#qa-cat').value=mm.cat;$('#qa-tag').value=mm.tag||'';if(mm.acct)$('#qa-acct').value=mm.acct}
     else{const c=catFor(v,-1);if(c!=='Uncategorized'&&[...$('#qa-cat').options].some(o=>o.value===c))$('#qa-cat').value=c}
   });
   f.addEventListener('submit',async e=>{
@@ -1260,7 +1299,7 @@ function budget(list){
   const row=(name,bud,editable)=>{
     const s=L.by[name]||0,b=bills[name]||0,used=s+b;tb+=bud;tbi+=b;ts+=s;const pct=bud>0?Math.min(100,Math.max(0,used/bud*100)):0,over=bud>0&&used>bud+0.5;
     if(!editable&&!s&&!b)return'';
-    return`<tr${editable?` data-cat="${esc(name)}"`:''}><td class="catn">${editable?`<button class="grip" type="button" data-cat="${esc(name)}" aria-label="Move ${esc(name)}. Drag, or use the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></g></svg></button>`:'<span class="grip-sp"></span>'}${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td><td class="num">${b?f0(b):''}</td><td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
+    return`<tr${editable?` data-cat="${esc(name)}"`:''}><td class="catn">${editable?`<button class="grip" type="button" data-cat="${esc(name)}" aria-label="Move ${esc(name)}. Drag, or use the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></g></svg></button>`:'<span class="grip-sp"></span>'}${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td><td class="num">${b?f0(b):''}</td><td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable&&!PERM.includes(name)?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
   };
   const rows=plan.cats.map(c=>row(c.name,+c.budget||0,true)).join('')+extra.map(n=>row(n,0,false)).join('');
   return`<div class="scroll"><table><thead><tr><th>Category</th><th class="num">Monthly budget</th><th class="num">Bills</th><th class="num">Logged</th><th class="num">Left</th><th></th><th></th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="num">${f0(tb)}</td><td class="num">${f0(tbi)}</td><td class="num">${f0(ts)}</td><td class="num">${tb>0?f0(tb-tbi-ts):''}</td><td></td><td></td></tr></tbody></table></div>`;
@@ -1503,7 +1542,113 @@ function vTrends(){
   <div class="sec"><h2>Logged spending by month</h2><div class="viz"><div class="lg">${series.map((s,i)=>`<span><i style="background:${col(s,i)}"></i>${esc(s)}</span>`).join('')}</div>${svg}</div>
   <div class="scroll" style="margin-top:10px"><table><thead><tr><th>Month</th>${series.map(s=>`<th class="num">${esc(s)}</th>`).join('')}<th class="num">Total</th><th class="num">Per day</th>${allTags.map(t=>`<th class="num">Tag: ${esc(t)}</th>`).join('')}</tr></thead><tbody>${data.map(d=>`<tr><td>${MON[+d.m.slice(5)-1]} ${d.m.slice(0,4)}</td>${series.map(s=>`<td class="num">${val(d,s)?f0(val(d,s)):''}</td>`).join('')}<td class="num"><b>${f0(d.total)}</b></td><td class="num">${d.n?f2(d.total/new Date(+d.m.slice(0,4),+d.m.slice(5),0).getDate()):''}</td>${allTags.map(t=>`<td class="num">${d.tags[t]?f0(d.tags[t]):''}</td>`).join('')}</tr>`).join('')}</tbody></table></div>
   <p class="muted small">Logged spending only. Bills and card payments aren't included, and partial months show as partial.</p></div>
+  ${chartsHtml()}
   <div class="sec"><h2>Net worth</h2>${nwh}</div>`;
+}
+/* ---------- your charts: one thing (merchants, tags or categories) tracked month by month ---------- */
+const lc=s=>String(s||'').trim().toLowerCase();
+const csv=s=>String(s||'').split(',').map(x=>x.trim()).filter(Boolean);
+const uniqCI=a=>a.filter((x,i)=>a.findIndex(y=>lc(y)===lc(x))===i);
+/* moving money between your own accounts, and income, aren't spending */
+const CH_SKIP=['Transfer','Income'];
+const chOpen=new Set();
+function chartTest(c){
+  const w=(c.words||[]).map(lc).filter(Boolean),g=(c.tags||[]).map(lc).filter(Boolean),k=(c.cats||[]).map(lc).filter(Boolean);
+  return t=>!CH_SKIP.includes(t.cat)&&(w.some(x=>lc(t.desc).includes(x))||(!!t.tag&&g.includes(lc(t.tag)))||k.includes(lc(t.cat)));
+}
+const firstMonth=()=>Object.keys(tx).filter(m=>tx[m].items.length).sort()[0]||'';
+function chartMonths(){
+  const end=view.y*12+view.m,span=+plan.chartSpan||0,f=firstMonth();
+  const start=span?end-span+1:(f?Math.min(end-5,mi(f+'-01')):end-11);
+  const ms=[];for(let i=start;i<=end;i++)ms.push(`${Math.floor(i/12)}-${pad(i%12+1)}`);return ms;
+}
+function chartData(c,ms){
+  const hit=chartTest(c),rows=[];
+  const per=ms.map(m=>{let amt=0,n=0;(tx[m]?.items||[]).forEach(t=>{if(!hit(t))return;amt-=t.amt;if(t.amt<0)n++;rows.push(t)});return{m,amt:r2(amt),n}});
+  return{per,rows};
+}
+function chartWhat(c){
+  const p=[];
+  if(c.words?.length)p.push(`the merchant contains ${c.words.map(w=>`“${w}”`).join(' or ')}`);
+  if(c.tags?.length)p.push(`it’s tagged ${c.tags.join(' or ')}`);
+  if(c.cats?.length)p.push(`it’s in ${c.cats.join(' or ')}`);
+  return p.length?`Counts a purchase when ${p.join(', or ')}.`:'Counts nothing yet. Edit it to say what to count.';
+}
+const monYr=m=>`${MON[+m.slice(5)-1]} ${m.slice(0,4)}`;
+function chartSvg(c,per,avg){
+  const by=c.by==='n'?'n':'amt',val=d=>Math.max(0,d[by]),fmt=by==='n'?(x=>String(Math.round(x))):(x=>x<100&&x%1?'$'+x.toFixed(2):kfmt(x)),lab=d=>by==='n'?d.n:d.amt<100?f2(d.amt):f0(d.amt);
+  const W=680,H=220,ml=48,mr=10,mt=20,mb=40,iw=W-ml-mr,ih=H-mt-mb,mx=Math.max(0,...per.map(val));
+  /* gridlines on round steps (1, 2 or 5 times a power of ten), three or four of them */
+  const raw=Math.max(mx,by==='n'?3:1)/4,p10=Math.pow(10,Math.floor(Math.log10(raw))),q=raw/p10,step=Math.max(by==='n'?1:0,(q<=1?1:q<=2?2:q<=5?5:10)*p10),nt=Math.max(1,Math.ceil(mx/step-1e-9)),ymax=step*nt,y=v=>mt+ih-v/ymax*ih;
+  const band=iw/per.length,bw=Math.min(44,band*.62),every=Math.ceil(per.length/12);
+  let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(c.name)}: ${by==='n'?'purchases':'money spent'} by month">`;
+  for(let i=0;i<=nt;i++){const v=step*i,yy=y(v);s+=`<line class="${i?'gl':'base'}" x1="${ml}" x2="${W-mr}" y1="${yy}" y2="${yy}"/><text x="${ml-8}" y="${yy+4}" text-anchor="end">${fmt(v)}</text>`}
+  const iMax=per.reduce((b,d,i)=>val(d)>val(per[b])?i:b,0);
+  per.forEach((d,i)=>{
+    const x=ml+band*i+(band-bw)/2,v=val(d),cx=x+bw/2;
+    if(v>0)s+=`<path d="${roundTop(x,y(v),bw,Math.max(1,y(0)-y(v)),4)}" fill="var(--s1)"/>`;
+    if(v>0&&(i===iMax||i===per.length-1))s+=`<text x="${cx}" y="${y(v)-6}" text-anchor="middle" style="fill:var(--ink)">${lab(d)}</text>`;
+    if(i%every===0||i===per.length-1&&per.length<=12){
+      s+=`<text x="${cx}" y="${H-22}" text-anchor="middle">${MON[+d.m.slice(5)-1]}</text>`;
+      if(i===0||d.m.endsWith('-01'))s+=`<text x="${cx}" y="${H-6}" text-anchor="middle">${d.m.slice(0,4)}</text>`;
+    }
+    s+=`<rect x="${ml+band*i}" y="${mt}" width="${band}" height="${ih}" fill="transparent" data-tip="${monYr(d.m)}: ${f2(d.amt)} · ${d.n} purchase${d.n===1?'':'s'}"/>`;
+  });
+  if(avg>0&&avg<=ymax){const ya=y(avg);s+=`<line x1="${ml}" x2="${W-mr}" y1="${ya}" y2="${ya}" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="4 4" pointer-events="none"/>`}
+  return s+'</svg>';
+}
+function chartCard(c,ms){
+  const {per,rows}=chartData(c,ms),by=c.by==='n'?'n':'amt';
+  const f=firstMonth(),live=per.filter(d=>d.m>=f&&d.m<=TODAY.slice(0,7)),nm=live.length||1;
+  const tot=r2(per.reduce((s,d)=>s+d.amt,0)),n=per.reduce((s,d)=>s+d.n,0),avg=(by==='n'?n:tot)/nm,cur=per[per.length-1];
+  const top={};rows.filter(t=>t.amt<0).forEach(t=>{const k=t.desc.trim();top[k]=(top[k]||0)+1});
+  const mostly=Object.entries(top).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([k,v])=>`${esc(k)} ×${v}`).join(', ');
+  const yr=TODAY.slice(0,4),list=rows.slice().sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
+  const span=+plan.chartSpan?`last ${plan.chartSpan} months`:`since ${monYr(ms[0])}`;
+  return`<div class="chart" data-chart="${c.id}"><div class="chh"><h2>${esc(c.name)}</h2><span class="row" style="margin:0">
+    <span class="seg" role="group" aria-label="Show"><button type="button" data-act="chby" data-id="${c.id}" data-by="amt" aria-pressed="${by==='amt'}">Money</button><button type="button" data-act="chby" data-id="${c.id}" data-by="n" aria-pressed="${by==='n'}">Purchases</button></span>
+    <button class="btn sm" data-act="chedit" data-id="${c.id}">Edit</button><button class="btn sm ghost danger" data-act="chdel" data-id="${c.id}" aria-label="Remove chart ${esc(c.name)}">×</button></span></div>
+  <p class="muted small" style="margin:0 0 8px">${esc(chartWhat(c))}${mostly?` Mostly ${mostly}.`:''}</p>
+  ${rows.length?`<div class="cards sm"><div class="card"><small>Total, ${esc(span)}</small><b>${f2(tot)}</b></div><div class="card"><small>Purchases</small><b>${n}</b></div><div class="card"><small>Per month on average</small><b>${by==='n'?(Math.round(n/nm*10)/10)+' · ':''}${f2(tot/nm)}</b></div><div class="card"><small>Per purchase</small><b>${n?f2(tot/n):'—'}</b></div><div class="card"><small>${MONL[+cur.m.slice(5)-1]}</small><b>${by==='n'?cur.n+' · ':''}${f2(cur.amt)}</b></div></div>
+  <div class="viz" style="margin-top:10px"><div class="lg"><span><i style="background:var(--s1)"></i>${by==='n'?'Purchases':'Spent'} each month</span><span><i class="dash"></i>Average, ${by==='n'?(Math.round(avg*10)/10)+' a month':f2(avg)}</span></div>${chartSvg(c,per,avg)}</div>
+  <details data-ch="${c.id}"${chOpen.has(c.id)?' open':''}><summary>Show the ${list.length} transaction${list.length===1?'':'s'}</summary><div class="scroll"><table><thead><tr><th>Date</th><th>Merchant</th><th>Category</th><th class="num">Amount</th></tr></thead><tbody>${list.map(t=>`<tr><td>${dl(t.date)}${t.date.slice(0,4)!==yr?', '+t.date.slice(0,4):''}</td><td>${esc(t.desc)}${t.tag?`<span class="pill tag">${esc(t.tag)}</span>`:''}</td><td>${esc(t.cat)}</td><td class="num ${t.amt>0?'pos':''}">${f2(t.amt)}</td></tr>`).join('')}</tbody></table></div></details>`
+  :`<div class="empty">Nothing matches in these months. Try a shorter word, or edit what it counts.</div>`}</div>`;
+}
+function chartsHtml(){
+  const ms=chartMonths(),cats=catList().filter(c=>!CH_SKIP.includes(c));
+  const sug=uniqCI([...tagList(),...cats,...Object.values(plan.merch||{}).map(v=>v.desc)]);
+  return`<div class="sec" id="charts"><h2>Your charts</h2>
+  <p class="muted small" style="margin:-4px 0 10px">Follow one thing month by month: a merchant, a tag or a category. Separate several with commas.</p>
+  <form class="row" id="chq" autocomplete="off"><input class="grow" id="chq-in" list="chq-l" placeholder="For example: parking, BART, Jack in the Box" aria-label="What to chart"><datalist id="chq-l">${sug.map(x=>`<option value="${esc(x)}">`).join('')}</datalist><button class="btn pri" type="submit">Add chart</button>
+  <select data-act="chspan" style="width:auto" aria-label="Months to show">${[[6,'Last 6 months'],[12,'Last 12 months'],[24,'Last 2 years'],[0,'All months']].map(([v,l])=>`<option value="${v}"${(+plan.chartSpan||0)===v?' selected':''}>${l}</option>`).join('')}</select></form>
+  ${plan.charts.length?plan.charts.map(c=>chartCard(c,ms)).join(''):'<div class="empty">No charts yet. Type something you buy, like parking or a restaurant, and add a chart to see it month by month.</div>'}
+  <p class="muted small">Charts count logged purchases in any category except Transfer and Income, and refunds take money back off. Months end at ${MONL[view.m]} ${view.y}.</p></div>`;
+}
+function quickChart(q){
+  const terms=csv(q);if(!terms.length)return;
+  const cats=catList().filter(c=>!CH_SKIP.includes(c)),tags=tagList(),c={id:uid(),name:'',words:[],tags:[],cats:[],by:'amt'};
+  terms.forEach(x=>{const k=cats.find(k=>lc(k)===lc(x));if(k){c.cats.push(k);return}c.words.push(x);tags.filter(g=>lc(g)===lc(x)).forEach(g=>c.tags.push(g))});
+  c.words=uniqCI(c.words);c.tags=uniqCI(c.tags);c.cats=uniqCI(c.cats);
+  const nm=terms.length===1&&c.cats.length?c.cats[0]:terms.join(', ');c.name=nm.charAt(0).toUpperCase()+nm.slice(1);
+  plan.charts.push(c);savePlan();paint();
+  document.querySelector(`[data-chart="${c.id}"]`)?.scrollIntoView({block:'nearest',behavior:'smooth'});
+}
+function editChart(id){
+  const c=plan.charts.find(x=>x.id===id);if(!c)return;
+  const tags=uniqCI(tagList());
+  openForm('Edit chart',[
+    {k:'name',l:'Name',req:1},
+    {k:'words',l:'Merchant contains',ph:'parking, meter',help:'Separate with commas. Capital letters don’t matter, and part of a word is enough.'},
+    {k:'tags',l:'Or tagged',ph:'BART',help:tags.length?`Separate with commas. Your tags: ${tags.slice(0,15).join(', ')}${tags.length>15?'…':''}`:'Separate with commas.'},
+    {k:'cat',l:'Or in category',t:'select',opts:[['','— none —'],...catList().filter(x=>!CH_SKIP.includes(x)).map(x=>[x,x])]},
+    {k:'by',l:'Show',t:'select',opts:[['amt','Money spent'],['n','Number of purchases']]}],
+    {name:c.name,words:(c.words||[]).join(', '),tags:(c.tags||[]).join(', '),cat:c.cats?.[0]||'',by:c.by||'amt'},
+    o=>{Object.assign(c,{name:o.name,words:uniqCI(csv(o.words)),tags:uniqCI(csv(o.tags)),cats:o.cat?[o.cat,...(c.cats||[]).slice(1)]:[],by:o.by==='n'?'n':'amt'});savePlan();paint()});
+}
+function wireCharts(){
+  const f=$('#chq');if(!f)return;
+  f.onsubmit=e=>{e.preventDefault();const v=$('#chq-in').value;if(!csv(v).length){$('#chq-in').focus();return}quickChart(v)};
+  document.querySelectorAll('details[data-ch]').forEach(d=>d.ontoggle=()=>{d.open?chOpen.add(d.dataset.ch):chOpen.delete(d.dataset.ch)});
 }
 /* ---------- ask about spending ---------- */
 /* The app does the math and hands the AI a plain summary; the AI only explains it. */
@@ -1538,6 +1683,7 @@ function spendingFacts(){
   if(plan.bills.length){out.push(`\nSCHEDULED BILLS`);plan.bills.filter(b=>!b.planned).forEach(b=>out.push(`${b.name}: ${b.variable?'about ':''}${f2(+b.amt||0)}, ${(FREQS.find(f=>f[0]===b.freq)?.[1]||'').toLowerCase()}, about ${f2((+b.amt||0)*(PER[b.freq]||12)/12)} a month, category ${b.cat||'Other'}${isHSA(acct(b.acct))?', paid from the HSA':''}`))}
   const tags={};ms.forEach(m=>spent(m).forEach(t=>{if(t.tag)tags[t.tag]=(tags[t.tag]||0)-t.amt}));
   if(Object.keys(tags).length)out.push(`\nTAGGED SPENDING, LAST 6 MONTHS\n`+Object.entries(tags).map(([k,v])=>`${k}: ${f2(v)}`).join('\n'));
+  if(plan.charts?.length){out.push(`\nTHE PERSON'S OWN CHARTS, LAST 6 MONTHS (money spent and number of purchases each month)`);plan.charts.forEach(c=>{const {per}=chartData(c,ms);out.push(`${c.name} (${chartWhat(c)}): `+per.map(d=>`${lab(d.m)} ${f2(d.amt)}, ${d.n} purchases`).join('; ')+`. Total ${f2(per.reduce((x,d)=>x+d.amt,0))}, ${per.reduce((x,d)=>x+d.n,0)} purchases.`)})}
   const items=[...spent(cur)].sort((a,b)=>a.date<b.date?1:-1).slice(0,120);
   if(items.length){out.push(`\nTHIS MONTH'S PURCHASES, NEWEST FIRST`);items.forEach(t=>out.push(`${dl(t.date)} · ${t.desc} · ${t.cat} · ${t.amt<0?f2(-t.amt):'refund '+f2(t.amt)}${t.acct?' · '+acctName(t.acct):''}${t.tag?' · tag '+t.tag:''}`))}
   return out.join('\n');
@@ -1616,7 +1762,7 @@ function paint(){
   $('#mnav').hidden=['goals','debt','kickoff'].includes(tab);
   document.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',t.dataset.tab===tab));
   $('#main').innerHTML=VIEWS[tab]();
-  wireQA();wireTips();if(tab==='trends')wireAsk();
+  wireQA();wireTips();if(tab==='trends'){wireAsk();wireCharts()}
   if(tab==='spend'){
     const up=()=>{$('#txb').innerHTML=txRows();$('#txs').textContent=txSum()};
     $('#q').oninput=e=>{fq=e.target.value;up()};
@@ -1657,6 +1803,9 @@ document.addEventListener('click',e=>{
   else if(act==='backup')backup();else if(act==='restore')$('#rf').click();
   else if(act==='tadd')editTx();else if(act==='tedit')editTx(id);
   else if(act==='tdel'){const m=mk(view);tx[m].items=tx[m].items.filter(t=>t.id!==id);saveTx(m);paint()}
+  else if(act==='chby'){const c=plan.charts.find(x=>x.id===id);if(c){c.by=b.dataset.by==='n'?'n':'amt';savePlan();paint()}}
+  else if(act==='chedit')editChart(id);
+  else if(act==='chdel'){const c=plan.charts.find(x=>x.id===id);if(c)ask(`Remove the chart “${c.name}”?`,'Remove',()=>{plan.charts=plan.charts.filter(x=>x.id!==id);savePlan();paint()})}
   else if(act==='timport')openImport();else if(act==='trules')editRules();
   else if(act==='catadd')openForm('Add category',[{k:'name',l:'Category name',req:1},{k:'budget',l:'Monthly budget',t:'number'}],{},o=>{if(!catList().includes(o.name)){plan.cats.push({name:o.name,budget:o.budget});savePlan()}render()});
   else if(act==='catdel'){const c=b.dataset.cat;ask(`Remove category “${c}”?`,'Remove',()=>{plan.cats=plan.cats.filter(x=>x.name!==c);savePlan();render()})}
@@ -1725,6 +1874,7 @@ document.addEventListener('change',e=>{
   else if(act==='payon'){setPay(b.dataset.key,b.value);paint();if(b.value)toast(`Payment moved to ${dl(b.value)}`)}
   else if(act==='stmt'){const a=A();if(a){a.stmt=Math.max(0,num());savePlan();paint()}}
   else if(act==='bal'){const a=A();if(a){a.bal=num();a.upd=TODAY;a.updAt=Date.now();snapNW();savePlan();paint()}}
+  else if(act==='chspan'){plan.chartSpan=+b.value||0;savePlan();paint()}
   else if(act==='tcat'){const m=mk(view),t=tx[m].items.find(x=>x.id===id);if(t){t.cat=b.value;saveTx(m);learn(t);$('#txs').textContent=txSum()}}
 });
 
@@ -1747,6 +1897,7 @@ addEventListener('pagehide',flushAll);
   if(!S.locked)status(okMsg());
   plan.payOn=plan.payOn||{};
   if(upgrade(plan))savePlan();
+  await recatOnce();
   const ui=lget('ui');if(ui&&VIEWS[ui.tab]&&ui.tab!=='kickoff')tab=ui.tab;
   if(plan.kickoff&&!plan.kickDone&&plan.accounts.length)tab='kickoff';
   render();

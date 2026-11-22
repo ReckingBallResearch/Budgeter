@@ -6,7 +6,7 @@ A monthly budget planner that keeps your data on your own computer. No account, 
 - **Bills and income** on any schedule (weekly, every 2 weeks, twice a month, monthly, yearly…), including variable bills like energy and water: enter each month's amount when the bill arrives.
 - **Spending:** quick logging, CSV import from your bank, category rules, tags, and budgets per category (drag to reorder).
 - **Accounts:** checking, savings, credit cards (statement and due-date tracking), loans, investments, retirement and HSA (contributions, employer match, debit card spending, yearly IRS limit).
-- **Debt payoff planner** (avalanche or snowball), **trends** by category, and **net worth** over time.
+- **Debt payoff planner** (avalanche or snowball), **trends** by category, **your own charts** (follow a merchant, tag or category month by month, in money or number of purchases), and **net worth** over time.
 - **Optional local AI** on the Mac app: read PDF statements and screenshots (it tags the account they're for and can update its balance, statement and due date), and ask questions about your spending. It runs on your Mac through [Ollama](https://ollama.com), so nothing leaves your computer.
 
 ## Two ways to use it
