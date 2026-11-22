@@ -7,7 +7,7 @@ A monthly budget planner that keeps your data on your own computer. No account, 
 - **Spending:** quick logging, CSV import from your bank, category rules, tags, and budgets per category (drag to reorder).
 - **Accounts:** checking, savings, credit cards (statement and due-date tracking), loans, investments, retirement and HSA (contributions, employer match, debit card spending, yearly IRS limit).
 - **Debt payoff planner** (avalanche or snowball), **trends** by category, and **net worth** over time.
-- **Optional local AI** on the Mac app: read PDF statements and screenshots, and ask questions about your spending. It runs on your Mac through [Ollama](https://ollama.com), so nothing leaves your computer.
+- **Optional local AI** on the Mac app: read PDF statements and screenshots (it tags the account they're for and can update its balance, statement and due date), and ask questions about your spending. It runs on your Mac through [Ollama](https://ollama.com), so nothing leaves your computer.
 
 ## Two ways to use it
 
@@ -37,7 +37,7 @@ Reading PDF statements and screenshots, and the **Ask about your spending** pane
    ```
 3. In Budgeter, open **Spending → Import statement**. It should say the local AI is ready.
 
-A Mac with 16 GB of memory runs it comfortably; with 8 GB it's slower. A one-page statement takes about 20 seconds. Small models make mistakes, so you check every transaction before it's imported (with a **Flip them** link if money in and out come out backwards), and for spending questions the app does all the math while the AI only explains it. Scanned PDFs are pictures with no text in them; take screenshots of their pages instead.
+A Mac with 16 GB of memory runs it comfortably; with 8 GB it's slower. A one-page statement takes about 20 seconds. Small models make mistakes, so you check every transaction and every account change before it's imported (with a **Flip them** link if money in and out come out backwards), and for spending questions the app does all the math while the AI only explains it. Scanned PDFs are pictures with no text in them; take screenshots of their pages instead.
 
 ## Your data
 - **Back up regularly:** **Download backup** at the bottom of the page saves everything to a file. **Restore from backup** loads it, including into the other version (browser ↔ Mac app).

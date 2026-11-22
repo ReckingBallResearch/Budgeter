@@ -12,6 +12,7 @@ This folder is the source of truth. Edit `app/index.html` here, then ship it to 
 - Don't break saved data: the localStorage prefix is `budgeter:`, backups are `{app:'budgeter',version:2,plan,tx}`, and restore also accepts the old `monthly-planner` v1 backups. Put schema changes in `upgrade(p)`, which runs on load and on restore.
 - Keep the light/dark tokens on `:root` and the phone layout (≤640px) working.
 - Don't trust a small model with signs or arithmetic: the AI copies amounts as printed and the app sets the sign (`fromClaude`); for questions the app computes every total in `spendingFacts()` and the AI only explains them.
+- Statement imports read the account box first (`stmtAcct`). With statement text, `stmtInfo` keeps a value only where it's printed next to its label and reads the last 4 digits itself; `findAcct` matches by last 4, then file name, then name words. Account changes are checkboxes the user sees before import, and older statements default off.
 
 ## Run
 - Browser preview: the `budgeter` config in `.claude/launch.json` serves `app/` on port 8765 (localStorage-only mode, same as desktop).
