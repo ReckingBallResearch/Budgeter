@@ -4,7 +4,7 @@ A monthly budget planner that keeps your data on your own computer. No account, 
 
 - **Overview:** income − bills − goals = spending money for the month, what's left to spend per day, a calendar of money in and out, and projected account balances. It warns you when a bill would overdraw an account and when to move money.
 - **Bills and income** on any schedule (weekly, every 2 weeks, twice a month, monthly, yearly…), including variable bills like energy and water: enter each month's amount when the bill arrives.
-- **Spending:** quick logging, CSV import from your bank, category rules, tags, and budgets per category (drag to reorder).
+- **Transactions:** quick logging, CSV import from your bank, category rules, tags, and budgets per category (drag to reorder).
 - **Accounts:** checking, savings, credit cards (statement and due-date tracking), loans, investments, retirement and HSA (contributions, employer match, debit card spending, yearly IRS limit).
 - **Debt payoff planner** (avalanche or snowball), **trends** by category, **your own charts** (follow a merchant, tag or category month by month, in money or number of purchases), and **net worth** over time.
 - **Optional local AI** on the Mac app: read PDF statements and screenshots (it tags the account they're for and can update its balance, statement and due date), and ask questions about your spending. It runs on your Mac through [Ollama](https://ollama.com), so nothing leaves your computer.
@@ -35,7 +35,7 @@ Reading PDF statements and screenshots, and the **Ask about your spending** pane
    ```
    ollama pull gemma3:4b
    ```
-3. In Budgeter, open **Spending → Import statement**. It should say the local AI is ready.
+3. In Budgeter, open **Transactions → Import statement**. It should say the local AI is ready.
 
 A Mac with 16 GB of memory runs it comfortably; with 8 GB it's slower. A one-page statement takes about 20 seconds. Small models make mistakes, so you check every transaction and every account change before it's imported (with a **Flip them** link if money in and out come out backwards), and for spending questions the app does all the math while the AI only explains it. Scanned PDFs are pictures with no text in them; take screenshots of their pages instead.
 
