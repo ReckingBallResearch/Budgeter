@@ -748,7 +748,7 @@ function editTx(id){
 }
 function editRules(){
   openForm('Category rules',[
-    {k:'rules',l:'Rules',t:'textarea',help:'One per line: keyword = Category. Matching ignores case and the first match wins. Merchants you have logged before use their last category first. Use “Bill payment” for bills already tracked on the Bills tab, so they are not counted twice.'},
+    {k:'rules',l:'Rules',t:'textarea',help:'One per line: keyword = Category. Matching ignores case and the first match wins. Merchants you have logged before use their last category first. Use “Bill payment” for paying off a card or loan from checking: it’s left out of spending, since the purchases were already logged on the card.'},
     {k:'reapply',l:'Also re-categorize uncategorized transactions in this month',t:'checkbox'}],
     {rules:plan.rules,reapply:true},o=>{
       plan.rules=o.rules;
@@ -1291,9 +1291,8 @@ const isBudgetOut=e=>e.t==='out'&&!e.card&&!isHSA(acct(e.acct));
    statements, already includes the bills once they're paid, so counting them from the Bills tab too would count them twice. */
 const billsIn=()=>!!plan.billsIn;
 const budgetBills=list=>billsIn()?(list||[]).filter(isBudgetOut):[];
-const NOBUDGET=()=>billsIn()?NOSPEND:NOSPEND.filter(c=>c!=='Bill payment');
 function logged(m){
-  const k=KICK(),skip=NOBUDGET(),items=(tx[m]||{items:[]}).items.filter(t=>!skip.includes(t.cat)&&!hsaPaid(t)&&!(k&&m===k.slice(0,7)&&t.date<k));
+  const k=KICK(),items=(tx[m]||{items:[]}).items.filter(t=>!NOSPEND.includes(t.cat)&&!hsaPaid(t)&&!(k&&m===k.slice(0,7)&&t.date<k));
   const by={};items.forEach(t=>{by[t.cat]=(by[t.cat]||0)-t.amt});return{items,by,total:Object.values(by).reduce((s,v)=>s+v,0)};
 }
 function budget(list){
@@ -1403,7 +1402,7 @@ function vOverview(){
   <div class="sec">${cal(list,tips)}</div>
   <div class="sec"><h2>Money in and out</h2>${list.length?`<div class="scroll"><table><thead><tr><th>Done</th><th>Date</th><th>Item</th><th>Account</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead><tbody>${list.map(e=>`<tr class="${plan.done[e.key]?'done':e.date<TODAY?'past':''}${e.short?' short':''}"><td><input type="checkbox" data-act="done" data-key="${esc(e.key)}"${plan.done[e.key]?' checked':''} aria-label="Mark ${esc(e.name)} done"></td><td>${e.pay?payCell(e):dl(e.date)}</td><td>${esc(e.name)}${e.planned?'<span class="pill">planned</span>':''}${e.card?'<span class="pill">card payment</span>':''}${e.dividend?`<span class="pill">${e.mode==='reinvest'?'reinvested':'to buying power'}</span>`:''}${e.contrib?`<span class="pill">${e.hsa?'HSA':'retirement'}</span>`:''}${!e.contrib&&e.t==='out'&&isHSA(acct(e.acct))?'<span class="pill">HSA</span>':''}${acct(e.to)&&isDebt(acct(e.to))?'<span class="pill">loan</span>':''}</td><td>${esc(acctName(e.acct))}</td><td class="num ${e.t==='in'?'pos':''}">${amtCell(e)}</td><td class="num ${e.after<0&&!e.debt?'neg':''}">${e.after==null?'':e.debt?'owe '+f0(e.after):f0(e.after)}</td></tr>`).join('')}</tbody></table></div>
   <p class="muted" style="font-size:13px">Balances start from your account balances and count unchecked items from ${dl(START())} on. Check an item once it shows in the balance.</p>`:'<div class="empty">Nothing scheduled this month.</div>'}</div>
-  <div class="sec"><h2>Spending vs budget</h2>${budget(list)}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="catadd">Add category</button><label class="chk" style="font-size:13px"><input type="checkbox" data-act="billsin"${billsIn()?' checked':''}> Count bills from the Bills tab too</label><span class="muted" style="font-size:13px">${billsIn()?'Bills count toward their category by due date. Logged spending leaves out transfers and anything marked Bill payment.':'Logged spending only, so bills count once, when they’re logged. Transfers are left out.'}</span></div></div>`;
+  <div class="sec"><h2>Spending vs budget</h2>${budget(list)}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="catadd">Add category</button><label class="chk" style="font-size:13px"><input type="checkbox" data-act="billsin"${billsIn()?' checked':''}> Count bills from the Bills tab too</label><span class="muted" style="font-size:13px">${billsIn()?'Bills count toward their category by due date. Logged spending leaves out transfers and anything marked Bill payment.':'Logged spending only, so bills count once, when they’re logged. Transfers and Bill payment (paying off a card from checking) are left out, since the card’s purchases are already logged.'}</span></div></div>`;
 }
 
 /* ---------- lists ---------- */

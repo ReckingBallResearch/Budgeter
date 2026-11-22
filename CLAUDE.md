@@ -17,7 +17,7 @@ This folder is the source of truth. Edit `app/index.html` here, then ship it to 
 - Categories: `PERM` ones (Transport) are always on the list and can't be removed; `upgrade(p)` re-adds them. Merchant memory never lets "Uncategorized" override a rule, and `catFor` falls back to the built-in `TRANSPORT` words after the user's rules. `recatOnce()` runs once per `plan.catv` and files old uncategorized purchases. Saving rules adds any category they name that doesn't exist yet.
 - Your charts (`plan.charts`, Trends tab): each one counts a purchase that matches any of its merchant words, tags or categories, excluding Transfer and Income. The app computes every number, and `spendingFacts()` passes the charts to Ask.
 
-- Bills don't count against the Overview budget unless `plan.billsIn` is on (a checkbox under Spending vs budget). Logged spending comes from statements and already includes paid bills; with bills off, `logged()` also counts items marked Bill payment.
+- Bills don't count against the Overview budget unless `plan.billsIn` is on (a checkbox under Spending vs budget). Logged spending comes from statements and already includes paid bills. Bill payment (paying off a card or loan from checking) and Transfer stay out of spending either way; account balances come from statements, not from logged items.
 
 ## Run
 - Browser preview: the `budgeter` config in `.claude/launch.json` serves `app/` on port 8765 (localStorage-only mode, same as desktop).
