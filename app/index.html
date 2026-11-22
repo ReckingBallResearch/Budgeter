@@ -1287,22 +1287,27 @@ function cal(list,tips){
   return`<div class="cal">${h}</div>`;
 }
 const isBudgetOut=e=>e.t==='out'&&!e.card&&!isHSA(acct(e.acct));
+/* Bills count against the budget only when that's switched on (plan.billsIn). Off by default: logged spending, imported from
+   statements, already includes the bills once they're paid, so counting them from the Bills tab too would count them twice. */
+const billsIn=()=>!!plan.billsIn;
+const budgetBills=list=>billsIn()?(list||[]).filter(isBudgetOut):[];
+const NOBUDGET=()=>billsIn()?NOSPEND:NOSPEND.filter(c=>c!=='Bill payment');
 function logged(m){
-  const k=KICK(),items=(tx[m]||{items:[]}).items.filter(t=>!NOSPEND.includes(t.cat)&&!hsaPaid(t)&&!(k&&m===k.slice(0,7)&&t.date<k));
+  const k=KICK(),skip=NOBUDGET(),items=(tx[m]||{items:[]}).items.filter(t=>!skip.includes(t.cat)&&!hsaPaid(t)&&!(k&&m===k.slice(0,7)&&t.date<k));
   const by={};items.forEach(t=>{by[t.cat]=(by[t.cat]||0)-t.amt});return{items,by,total:Object.values(by).reduce((s,v)=>s+v,0)};
 }
 function budget(list){
-  const L=logged(mk(view)),bills={};
-  (list||[]).filter(isBudgetOut).forEach(e=>{const c=e.cat||'Other';bills[c]=(bills[c]||0)+e.amt});
+  const L=logged(mk(view)),bills={},sb=billsIn();
+  budgetBills(list).forEach(e=>{const c=e.cat||'Other';bills[c]=(bills[c]||0)+e.amt});
   const known=plan.cats.map(c=>c.name),extra=[...new Set([...Object.keys(L.by),...Object.keys(bills)])].filter(k=>!known.includes(k));
   let tb=0,tbi=0,ts=0;
   const row=(name,bud,editable)=>{
     const s=L.by[name]||0,b=bills[name]||0,used=s+b;tb+=bud;tbi+=b;ts+=s;const pct=bud>0?Math.min(100,Math.max(0,used/bud*100)):0,over=bud>0&&used>bud+0.5;
     if(!editable&&!s&&!b)return'';
-    return`<tr${editable?` data-cat="${esc(name)}"`:''}><td class="catn">${editable?`<button class="grip" type="button" data-cat="${esc(name)}" aria-label="Move ${esc(name)}. Drag, or use the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></g></svg></button>`:'<span class="grip-sp"></span>'}${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td><td class="num">${b?f0(b):''}</td><td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable&&!PERM.includes(name)?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
+    return`<tr${editable?` data-cat="${esc(name)}"`:''}><td class="catn">${editable?`<button class="grip" type="button" data-cat="${esc(name)}" aria-label="Move ${esc(name)}. Drag, or use the up and down arrow keys" title="Drag to reorder"><svg viewBox="0 0 10 16" width="10" height="16" aria-hidden="true"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/><circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/><circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></g></svg></button>`:'<span class="grip-sp"></span>'}${esc(name)}</td><td class="num">${editable?`<input class="mini" type="number" min="0" step="10" value="${bud||''}" placeholder="0" data-act="budget" data-cat="${esc(name)}" aria-label="Budget for ${esc(name)}">`:'—'}</td>${sb?`<td class="num">${b?f0(b):''}</td>`:''}<td class="num">${s?f0(s):''}</td><td class="num ${over?'neg':''}">${bud>0?f0(bud-used):''}</td><td><div class="bar${over?' over':''}"><i style="width:${pct}%"></i></div></td><td class="act">${editable&&!PERM.includes(name)?`<button class="btn sm ghost" data-act="catdel" data-cat="${esc(name)}" aria-label="Remove ${esc(name)}">×</button>`:''}</td></tr>`;
   };
   const rows=plan.cats.map(c=>row(c.name,+c.budget||0,true)).join('')+extra.map(n=>row(n,0,false)).join('');
-  return`<div class="scroll"><table><thead><tr><th>Category</th><th class="num">Monthly budget</th><th class="num">Bills</th><th class="num">Logged</th><th class="num">Left</th><th></th><th></th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="num">${f0(tb)}</td><td class="num">${f0(tbi)}</td><td class="num">${f0(ts)}</td><td class="num">${tb>0?f0(tb-tbi-ts):''}</td><td></td><td></td></tr></tbody></table></div>`;
+  return`<div class="scroll"><table><thead><tr><th>Category</th><th class="num">Monthly budget</th>${sb?'<th class="num">Bills</th>':''}<th class="num">Logged</th><th class="num">Left</th><th></th><th></th></tr></thead><tbody>${rows}<tr class="tot"><td>Total</td><td class="num">${f0(tb)}</td>${sb?`<td class="num">${f0(tbi)}</td>`:''}<td class="num">${f0(ts)}</td><td class="num">${tb>0?f0(tb-tbi-ts):''}</td><td></td><td></td></tr></tbody></table></div>`;
 }
 function srcFor(t){return plan.accounts.filter(a=>['checking','savings','cash'].includes(a.type)&&a.id!==t.acct&&(+a.bal||0)>=t.amount).sort((x,y)=>(y.type==='savings')-(x.type==='savings')||(+y.bal||0)-(+x.bal||0))[0]}
 function tipsHtml(tips){
@@ -1376,7 +1381,7 @@ function vOverview(){
   const {list,tips}=project();
   const stale=plan.accounts.filter(a=>a.type==='credit'&&+a.stmt>0&&a.duedate&&a.duedate<TODAY);
   const cnt=e=>!e.passive||plan.interestIn;
-  const inc=sum(list.filter(e=>e.t==='in'&&cnt(e))),out=sum(list.filter(isBudgetOut)),cardsOut=sum(list.filter(e=>e.card)),intr=sum(list.filter(e=>e.passive));
+  const inc=sum(list.filter(e=>e.t==='in'&&cnt(e))),billsDue=sum(list.filter(isBudgetOut)),out=billsIn()?billsDue:0,cardsOut=sum(list.filter(e=>e.card)),intr=sum(list.filter(e=>e.passive));
   const planned=plan.showPlanned?0:plan.bills.filter(b=>b.planned).reduce((s,b)=>s+occ(b,view.y,view.m).length*(+b.amt||0),0);
   const goals=plan.goals.reduce((s,g)=>s+goalNeed(g),0),free=inc-out-goals,L=logged(mk(view)),left=free-L.total;
   const dim=new Date(view.y,view.m+1,0).getDate(),isCur=mk(view)===TODAY.slice(0,7),firstDay=k&&mk(view)===k.slice(0,7)&&k>TODAY?+k.slice(8,10):1;
@@ -1385,12 +1390,12 @@ function vOverview(){
   const hsaOut=-(tx[mk(view)]?.items||[]).filter(t=>hsaPaid(t)&&!NOSPEND.includes(t.cat)).reduce((s,t)=>s+t.amt,0),hsaBills=sum(list.filter(e=>e.t==='out'&&!e.card&&isHSA(acct(e.acct))));
   return`${kickBanner()}<div class="eq">
     <div class="t"><small>Income</small><b>${f0(inc)}</b></div><span class="op">−</span>
-    <div class="t"><small>Bills</small><b>${f0(out)}</b></div><span class="op">−</span>
+    ${billsIn()?`<div class="t"><small>Bills</small><b>${f0(out)}</b></div><span class="op">−</span>`:''}
     <div class="t"><small>Goals</small><b>${f0(goals)}</b></div><span class="op">=</span>
     <div class="t free"><small>Spending money</small><b class="${free<0?'neg':'pos'}">${f0(free)}</b></div></div>
   <div class="left"><span class="muted">Logged so far</span><b>${f0(L.total)}</b><span class="muted">Left to spend</span><b class="${left<0?'neg':'pos'}">${f0(left)}</b>${daysLeft>0?`<span class="muted">About <b style="font-size:17px">${f0(Math.max(0,left)/daysLeft)}</b> a day for ${daysLeft} days</span>`:''}</div>
   <div class="note">${list.some(e=>e.passive)?`<label class="chk"><input type="checkbox" data-act="intin"${plan.interestIn?' checked':''}> Count interest and dividends as income</label>`:''}${plan.bills.some(b=>b.planned)?`<label class="chk"><input type="checkbox" data-act="planned"${plan.showPlanned?' checked':''}> Include planned bills</label>`:''}
-    ${cardsOut?`<span>Card payments this month total ${f0(cardsOut)}. They pay off earlier charges, so they're on the calendar but not counted above.</span>`:''}${planned?`<span>Planned bills would add ${f0(planned)}.</span>`:''}${intr&&!plan.interestIn?`<span>${f0(intr)} of interest and dividends expected, not counted.</span>`:''}${estIn?`<span>${f0(estIn)} of income is an estimate. Enter the real amount below once it lands.</span>`:''}${contribTot?`<span>${f0(contribTot)} goes into retirement this month, including employer money.</span>`:''}${hsaIn?`<span>${f0(hsaIn)} goes into your HSA this month, including employer money.</span>`:''}${hsaOut||hsaBills?`<span>${f0(hsaOut+hsaBills)} paid from your HSA this month isn't counted above, since it comes out of the HSA.</span>`:''}</div>
+    ${!billsIn()&&billsDue?`<span>${f0(billsDue)} of bills are due this month. They aren't subtracted here: they count once they're logged, so nothing counts twice.</span>`:''}${cardsOut?`<span>Card payments this month total ${f0(cardsOut)}. They pay off earlier charges, so they're on the calendar but not counted above.</span>`:''}${planned?`<span>Planned bills would add ${f0(planned)}.</span>`:''}${intr&&!plan.interestIn?`<span>${f0(intr)} of interest and dividends expected, not counted.</span>`:''}${estIn?`<span>${f0(estIn)} of income is an estimate. Enter the real amount below once it lands.</span>`:''}${contribTot?`<span>${f0(contribTot)} goes into retirement this month, including employer money.</span>`:''}${hsaIn?`<span>${f0(hsaIn)} goes into your HSA this month, including employer money.</span>`:''}${hsaOut||hsaBills?`<span>${f0(hsaOut+hsaBills)} paid from your HSA this month isn't counted above, since it comes out of the HSA.</span>`:''}</div>
   ${stale.length?`<div class="alert"><b>New statement?</b>${stale.map(a=>`<div class="tip"><span>${esc(a.name)} was due ${dl(a.duedate)}. Enter the next statement, due ${dl(nextDue(a,addDays(a.duedate,1)))}.</span><button class="btn sm" data-act="nextstmt" data-id="${a.id}">New statement</button></div>`).join('')}</div>`:''}
   ${(()=>{const bt=billsToEnter();return bt.length?`<div class="alert"><b>${bt.length===1?'A bill to enter':'Bills to enter'}</b>${bt.map(x=>`<div class="tip"><span>${esc(x.b.name)} should be out by now${x.due<TODAY?`, and was due ${dl(x.due)}`:`, due ${wdl(x.due)}`}. Enter the amount due.</span><span class="row" style="margin:0;flex-wrap:nowrap"><input class="mini" type="number" step="any" min="0" inputmode="decimal" placeholder="~${Math.round(+x.b.amt||0)}" data-act="due" data-key="${esc(x.key)}" aria-label="Amount due for ${esc(x.b.name)}, due ${dl(x.due)}"><button class="btn sm" data-act="duesave" data-key="${esc(x.key)}">Save</button></span></div>`).join('')}<p class="muted" style="font-size:13px;margin:8px 0 0">The amount replaces the estimate for that month. Check the bill off below once it's paid.</p></div>`:''})()}
   ${tipsHtml(tips)}
@@ -1398,7 +1403,7 @@ function vOverview(){
   <div class="sec">${cal(list,tips)}</div>
   <div class="sec"><h2>Money in and out</h2>${list.length?`<div class="scroll"><table><thead><tr><th>Done</th><th>Date</th><th>Item</th><th>Account</th><th class="num">Amount</th><th class="num">Balance after</th></tr></thead><tbody>${list.map(e=>`<tr class="${plan.done[e.key]?'done':e.date<TODAY?'past':''}${e.short?' short':''}"><td><input type="checkbox" data-act="done" data-key="${esc(e.key)}"${plan.done[e.key]?' checked':''} aria-label="Mark ${esc(e.name)} done"></td><td>${e.pay?payCell(e):dl(e.date)}</td><td>${esc(e.name)}${e.planned?'<span class="pill">planned</span>':''}${e.card?'<span class="pill">card payment</span>':''}${e.dividend?`<span class="pill">${e.mode==='reinvest'?'reinvested':'to buying power'}</span>`:''}${e.contrib?`<span class="pill">${e.hsa?'HSA':'retirement'}</span>`:''}${!e.contrib&&e.t==='out'&&isHSA(acct(e.acct))?'<span class="pill">HSA</span>':''}${acct(e.to)&&isDebt(acct(e.to))?'<span class="pill">loan</span>':''}</td><td>${esc(acctName(e.acct))}</td><td class="num ${e.t==='in'?'pos':''}">${amtCell(e)}</td><td class="num ${e.after<0&&!e.debt?'neg':''}">${e.after==null?'':e.debt?'owe '+f0(e.after):f0(e.after)}</td></tr>`).join('')}</tbody></table></div>
   <p class="muted" style="font-size:13px">Balances start from your account balances and count unchecked items from ${dl(START())} on. Check an item once it shows in the balance.</p>`:'<div class="empty">Nothing scheduled this month.</div>'}</div>
-  <div class="sec"><h2>Spending vs budget</h2>${budget(list)}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="catadd">Add category</button><span class="muted" style="font-size:13px">Bills count toward their category by due date. Logged spending leaves out transfers and anything marked Bill payment.</span></div></div>`;
+  <div class="sec"><h2>Spending vs budget</h2>${budget(list)}<div class="row" style="margin-top:10px"><button class="btn sm" data-act="catadd">Add category</button><label class="chk" style="font-size:13px"><input type="checkbox" data-act="billsin"${billsIn()?' checked':''}> Count bills from the Bills tab too</label><span class="muted" style="font-size:13px">${billsIn()?'Bills count toward their category by due date. Logged spending leaves out transfers and anything marked Bill payment.':'Logged spending only, so bills count once, when they’re logged. Transfers are left out.'}</span></div></div>`;
 }
 
 /* ---------- lists ---------- */
@@ -1659,8 +1664,8 @@ function spendingFacts(){
   const byCat=m=>{const b={};spent(m).forEach(t=>b[t.cat]=(b[t.cat]||0)-t.amt);return b};
   out.push(`Today is ${wdl(TODAY)}, ${TODAY.slice(0,4)}. "This month" means ${lab(cur)}. All amounts are US dollars.`);
   if(!(KICK()&&end<mi(KICK()))){
-    const {list}=project(),inc=sum(list.filter(e=>e.t==='in'&&(!e.passive||plan.interestIn))),bo=sum(list.filter(isBudgetOut)),gl=plan.goals.reduce((x,g)=>x+goalNeed(g),0),L=logged(cur);
-    out.push(`\nTHIS MONTH'S PLAN\nIncome ${f2(inc)}. Bills ${f2(bo)}. Set aside for goals ${f2(gl)}. Spending money ${f2(inc-bo-gl)}. Logged spending so far ${f2(L.total)}. Left to spend ${f2(inc-bo-gl-L.total)}.`);
+    const {list}=project(),inc=sum(list.filter(e=>e.t==='in'&&(!e.passive||plan.interestIn))),bo=sum(budgetBills(list)),gl=plan.goals.reduce((x,g)=>x+goalNeed(g),0),L=logged(cur);
+    out.push(`\nTHIS MONTH'S PLAN\nIncome ${f2(inc)}. ${billsIn()?`Bills ${f2(bo)}`:'Bills are not subtracted (they count once logged as spending)'}. Set aside for goals ${f2(gl)}. Spending money ${f2(inc-bo-gl)}. Logged spending so far ${f2(L.total)}. Left to spend ${f2(inc-bo-gl-L.total)}.`);
   }
   out.push(`\nLOGGED SPENDING BY MONTH (purchases only; bills aren't in these)`);
   ms.forEach(m=>{const b=byCat(m),t=Object.values(b).reduce((x,v)=>x+v,0),n=spent(m).length;
@@ -1668,7 +1673,7 @@ function spendingFacts(){
   const prev=ms.slice(2,5).filter(m=>spent(m).length),now_=byCat(cur),cats=new Set([...Object.keys(now_),...prev.flatMap(m=>Object.keys(byCat(m)))]);
   if(prev.length){out.push(`\nTHIS MONTH VS THE ${prev.length}-MONTH AVERAGE BEFORE IT`);
     [...cats].forEach(c=>{const a=prev.reduce((x,m)=>x+(byCat(m)[c]||0),0)/prev.length,v=now_[c]||0;out.push(`${c}: ${f2(v)} this month, average ${f2(a)}, difference ${v-a>=0?'+':'−'}${f2(Math.abs(v-a))}`)})}
-  const L=logged(cur),bills={};project().list.filter(isBudgetOut).forEach(e=>bills[e.cat||'Other']=(bills[e.cat||'Other']||0)+e.amt);
+  const L=logged(cur),bills={};budgetBills(project().list).forEach(e=>bills[e.cat||'Other']=(bills[e.cat||'Other']||0)+e.amt);
   const bud=plan.cats.filter(c=>+c.budget>0);
   if(bud.length){out.push(`\nBUDGETS THIS MONTH`);bud.forEach(c=>{const u=(L.by[c.name]||0)+(bills[c.name]||0);out.push(`${c.name}: budget ${f2(+c.budget)}, used ${f2(u)} (bills ${f2(bills[c.name]||0)}, logged ${f2(L.by[c.name]||0)}), ${u>c.budget?'over by '+f2(u-c.budget):f2(c.budget-u)+' left'}`)})}
   const merch=m=>{const o={};spent(m).filter(t=>t.amt<0).forEach(t=>{const k=t.desc.trim();(o[k]=o[k]||{n:0,t:0}).n++;o[k].t-=t.amt});return o};
@@ -1854,6 +1859,7 @@ document.addEventListener('change',e=>{
   const b=e.target.closest('[data-act]');if(!b||!plan)return;const {act,id}=b.dataset;const A=()=>acct(id),num=()=>parseFloat(b.value)||0;
   if(act==='done'||act==='kdone'){const k=b.dataset.key;if(b.checked)plan.done[k]=1;else delete plan.done[k];savePlan();if(act==='done')paint()}
   else if(act==='kdate'){plan.kickoff=b.value;savePlan();paint()}
+  else if(act==='billsin'){plan.billsIn=b.checked;savePlan();paint()}
   else if(act==='planned'){plan.showPlanned=b.checked;savePlan();paint()}
   else if(act==='intin'){plan.interestIn=b.checked;savePlan();paint()}
   else if(act==='extra'){plan.extra=Math.max(0,num());savePlan();paint()}
